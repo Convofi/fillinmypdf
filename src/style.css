@@ -90,7 +90,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 }
 .el.text { white-space: pre; min-width: 20px; min-height: 1.2em; outline-offset: 1px; }
 .el.text.wrap { white-space: pre-wrap; }
-.el.comb { white-space: pre; box-sizing: border-box; font-family: Courier, "Courier New", monospace; overflow: hidden; }
+.el.comb { white-space: pre; box-sizing: border-box; font-family: Courier, "Courier New", monospace; }
 .el.text:hover, .el.comb:hover { outline: 1px dashed #9ab; }
 .el[contenteditable="plaintext-only"] {
   cursor: text;

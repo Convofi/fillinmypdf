@@ -23,10 +23,13 @@ export async function exportPdf(
   password = '',
 ): Promise<Uint8Array> {
   // Decrypts owner- and user-password PDFs; the output is saved unencrypted.
-  const doc = await PDFDocument.load(originalBytes, { password });
+  const doc = await PDFDocument.load(originalBytes, { password, preserveXFA: true });
   // Bake form fields into the page so our text isn't hidden under widgets and fields aren't left live.
+  // XFA is dropped explicitly (pdf-lib would otherwise warn); viewers would show it instead of the flattened page.
   try {
-    doc.getForm().flatten();
+    const form = doc.getForm();
+    form.deleteXFA();
+    form.flatten();
   } catch {}
   const docPages = doc.getPages();
   const images = new Map<string, PDFImage>();
