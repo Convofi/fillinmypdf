@@ -3,7 +3,8 @@ import SignaturePad from 'signature_pad';
 export type Sig = { dataUrl: string; w: number; h: number };
 
 // Resolves with a trimmed, transparent PNG, or null if cancelled (or nothing was drawn).
-export function drawSignature(): Promise<Sig | null> {
+// onForget: when given, a "Forget saved signature" button calls it and closes the modal.
+export function drawSignature(onForget?: () => void): Promise<Sig | null> {
   return new Promise((resolve) => {
     const modal = document.createElement('div');
     modal.className = 'modal';
@@ -11,7 +12,7 @@ export function drawSignature(): Promise<Sig | null> {
       <div class="sheet-title">Draw your signature</div>
       <canvas></canvas>
       <div class="sheet-row">
-        <button data-a="clear">Clear</button><span></span>
+        <button data-a="clear">Clear</button>${onForget ? '<button data-a="forget" class="link">Forget saved signature</button>' : ''}<span></span>
         <button data-a="cancel">Cancel</button>
         <button data-a="done" class="primary">Done</button>
       </div></div>`;
@@ -37,7 +38,8 @@ export function drawSignature(): Promise<Sig | null> {
     modal.addEventListener('click', (e) => {
       const a = (e.target as HTMLElement).dataset.a;
       if (a === 'clear') pad.clear();
-      if (a === 'cancel' || (a === 'done' && pad.isEmpty())) close(null);
+      if (a === 'forget') onForget!();
+      if (a === 'cancel' || a === 'forget' || (a === 'done' && pad.isEmpty())) close(null);
       else if (a === 'done') close(trim(canvas, Math.ceil(4 * dpr)));
     });
   });

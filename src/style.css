@@ -141,6 +141,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 }
 .sheet-row { display: flex; gap: 8px; margin-top: 12px; }
 .sheet-row span { flex: 1; }
+.sheet-row .link { border: 0; background: none; padding: 0 4px; color: #777; font-size: 12px; text-decoration: underline; }
 
 /* Phone: hint moves to a second row */
 @media (max-width: 640px) {

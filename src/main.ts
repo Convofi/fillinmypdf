@@ -430,7 +430,16 @@ function setMode(m: typeof mode, savedSig = false) {
 
 async function drawNew() {
   setMode('none');
-  const s = await drawSignature();
+  // On a shared device the user can wipe the saved signature from the modal.
+  const forget = savedSig()
+    ? () => {
+        try {
+          localStorage.removeItem(SIG_KEY);
+        } catch {}
+        sig = null;
+      }
+    : undefined;
+  const s = await drawSignature(forget);
   if (!s) return;
   try {
     localStorage.setItem(SIG_KEY, JSON.stringify(s));
@@ -444,7 +453,12 @@ async function drawNew() {
 function savedSig(): Sig | null {
   try {
     const s = JSON.parse(localStorage.getItem(SIG_KEY) ?? 'null');
-    return s?.dataUrl && s.w && s.h ? s : null;
+    const ok = (n: unknown) => typeof n === 'number' && Number.isFinite(n) && n > 0;
+    // Only ever used as <img>.src / embedPng, but reject anything that isn't a PNG data URL.
+    if (typeof s?.dataUrl === 'string' && s.dataUrl.startsWith('data:image/png;base64,') && ok(s.w) && ok(s.h))
+      return { dataUrl: s.dataUrl, w: s.w, h: s.h };
+    localStorage.removeItem(SIG_KEY);
+    return null;
   } catch {
     return null;
   }
