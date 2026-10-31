@@ -15,7 +15,8 @@
 - No upload: the document is read from and saved back to the user's own disk.
 - No account, no sign-up.
 - Flattened output: form fields are baked into the page; scripts, auto-run and launch/submit actions are removed.
-- Strict Content-Security-Policy: scripts only from the site itself, no inline scripts, no connections to other servers.
+- Strict Content-Security-Policy: scripts only from the site itself, no inline scripts.
+- The only network traffic after load is cookieless page-view analytics on our own domain; no document data is ever sent.
 
 ## Limitations
 

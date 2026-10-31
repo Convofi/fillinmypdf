@@ -45,18 +45,22 @@
   </head>
   <body>
     <main id="empty">
+      <header class="bar">
+        <div class="left"><span class="wordmark"><svg class="mark" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h10l7 7v16a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3z" /><path d="M19 3v7h7" /><path d="M10.5 22.5c1.8-3.2 3.2-3.4 4.2-1.3s2.6 2.1 5.8-2.2" /></svg>Fill In My PDF</span></div>
+      </header>
       <section class="hero">
-        <div class="wordmark">Fill In My PDF</div>
+        <h1>Fill in and sign any PDF.</h1>
+        <p class="lede">Free. No account. Your file never leaves your device.</p>
         <button type="button" id="drop" class="drop">
           <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h10l7 7v16a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3z" /><path d="M19 3v7h7" /><path d="M10.5 22.5c1.8-3.2 3.2-3.4 4.2-1.3s2.6 2.1 5.8-2.2" /></svg>
           <span class="drop-title">Drop your PDF here</span>
           <span class="muted">or click to open</span>
         </button>
-        <p class="tagline">Free. No account. Your file never leaves your device.</p>
+        <a class="cue" href="#how">How it works ↓</a>
       </section>
       <div class="landing">
-        <h1>Fill in and sign any PDF, right in your browser.</h1>
-        <section>
+        <p class="intro">Fill in and sign any PDF, right in your browser.</p>
+        <section id="how">
           <h2>How it works</h2>
           <ol>
             <li>Drop in a PDF.</li>
@@ -64,13 +68,13 @@
             <li>Download the finished file.</li>
           </ol>
         </section>
-        <section>
+        <section id="free">
           <h2>Why it's free</h2>
           <p>The whole app runs inside your browser. There is no server doing work for you, so there is almost nothing for us to pay for, and nothing to charge you for.</p>
         </section>
-        <section>
+        <section id="never">
           <h2>What we never do</h2>
-          <ul>
+          <ul class="checks">
             <li>Upload your document.</li>
             <li>Ask you to create an account.</li>
             <li>Store your files, your text, or your signature on any server.</li>
@@ -78,7 +82,7 @@
             <li>Limit how many files you can sign.</li>
           </ul>
         </section>
-        <section>
+        <section id="faq">
           <h2>Questions</h2>
           <dl>
             <dt><strong>Is it safe for personal documents like tax forms or immigration forms?</strong></dt>
@@ -101,7 +105,7 @@
     <div id="editor" hidden>
       <header class="bar">
         <div class="left">
-          <button type="button" id="brand" class="wordmark">Fill In My PDF</button>
+          <button type="button" id="brand" class="wordmark"><svg class="mark" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h10l7 7v16a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3z" /><path d="M19 3v7h7" /><path d="M10.5 22.5c1.8-3.2 3.2-3.4 4.2-1.3s2.6 2.1 5.8-2.2" /></svg>Fill In My PDF</button>
           <button type="button" id="open" class="quiet">Open</button>
           <span id="name"></span>
           <span id="pwnote" class="note" hidden>Download will not be password-protected.</span>

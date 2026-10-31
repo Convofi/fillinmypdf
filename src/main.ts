@@ -2,13 +2,20 @@ import './style.css';
 import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, PageViewport, RenderTask } from 'pdfjs-dist';
-import { exportPdf, type El } from './export';
+import { exportPdf, openPdf, UnsafeExport, type El } from './export';
 import { drawSignature, type Sig } from './signature';
-import { askPassword } from './password';
+import { askPassword, notice } from './dialogs';
 import { inject, track } from '@vercel/analytics';
 
 // Cookieless page views + a bare 'download' count; served from our own origin (/_vercel/insights) on Vercel.
-inject({ mode: import.meta.env.PROD ? 'production' : 'development' });
+// Analytics never sees query strings, fragments (utm_*, tokens) or the page we were reached from.
+try {
+  Object.defineProperty(document, 'referrer', { get: () => '' });
+} catch {}
+inject({
+  mode: import.meta.env.PROD ? 'production' : 'development',
+  beforeSend: (event) => ({ ...event, url: event.url.split(/[?#]/)[0] }),
+});
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -116,13 +123,7 @@ async function load(file: File) {
   let ocShown = new Set<string>();
   for (;;) {
     // pdf.js transfers the buffer it is given, so hand it a copy and keep the original for pdf-lib.
-    task = pdfjs.getDocument({
-      data: data.slice(),
-      password: pw,
-      standardFontDataUrl: `${import.meta.env.BASE_URL}standard_fonts/`,
-      wasmUrl: `${import.meta.env.BASE_URL}wasm/`, // JPEG2000 / JBIG2 / ICC decoders
-      verbosity: pdfjs.VerbosityLevel.ERRORS,
-    });
+    task = openPdf(data.slice(), pw);
     try {
       const doc = await task.promise;
       const oc = await doc.getOptionalContentConfig();
@@ -590,9 +591,10 @@ downloadBtn.addEventListener('click', async () => {
   if (!bytes) return;
   if (editing()) (document.activeElement as HTMLElement).blur();
   downloadBtn.disabled = true;
-  downloadBtn.textContent = 'Working…';
+  downloadBtn.textContent = 'Checking…';
   try {
-    const out = await exportPdf(bytes, els.filter((e) => !typed(e) || e.text?.trim()), pages, password, ocVisible);
+    const stage = (s: 'checking' | 'saving') => (downloadBtn.textContent = s === 'checking' ? 'Checking…' : 'Saving…');
+    const out = await exportPdf(bytes, els.filter((e) => !typed(e) || e.text?.trim()), pages, password, ocVisible, pdf!, stage);
     const url = URL.createObjectURL(new Blob([out as BlobPart], { type: 'application/pdf' }));
     const a = document.createElement('a');
     a.href = url;
@@ -604,8 +606,12 @@ downloadBtn.addEventListener('click', async () => {
     cleanState = JSON.stringify(els);
     track('download');
   } catch (err) {
-    console.error(err);
-    alert("Sorry, the PDF couldn't be created.");
+    if (err instanceof UnsafeExport)
+      await notice("This PDF can't be saved safely.", 'The file contains content that would look different in the saved copy than it does here.');
+    else {
+      console.error(err);
+      alert("Sorry, the PDF couldn't be created.");
+    }
   } finally {
     downloadBtn.disabled = false;
     downloadBtn.textContent = 'Download';

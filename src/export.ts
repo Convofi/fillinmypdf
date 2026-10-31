@@ -1,8 +1,21 @@
 import {
-  PDFArray, PDFDict, PDFDocument, PDFName, PDFRef, PDFStream, StandardFonts, degrees, rgb,
+  PDFArray, PDFDict, PDFDocument, PDFDropdown, PDFName, PDFOptionList, PDFRef, PDFStream, PDFTextField, StandardFonts, degrees, rgb,
   type PDFFont, type PDFImage, type PDFObject,
 } from '@cantoo/pdf-lib';
-import type { PageViewport } from 'pdfjs-dist';
+import * as pdfjs from 'pdfjs-dist';
+import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from 'pdfjs-dist';
+
+// One set of pdf.js options for the editor and for the export check, so both see the file the same way.
+export const pdfOptions = {
+  standardFontDataUrl: `${import.meta.env.BASE_URL}standard_fonts/`,
+  wasmUrl: `${import.meta.env.BASE_URL}wasm/`, // JPEG2000 / JBIG2 / ICC decoders
+  verbosity: pdfjs.VerbosityLevel.ERRORS,
+};
+
+export const openPdf = (data: Uint8Array, password = '') => pdfjs.getDocument({ data, password, ...pdfOptions });
+
+/** The flattened file would not look like what pdf.js showed (or the check itself could not run). */
+export class UnsafeExport extends Error {}
 
 export type El = {
   id: string;
@@ -24,12 +37,16 @@ export async function exportPdf(
   elements: El[],
   pages: { viewport1: PageViewport }[],
   password = '',
-  ocVisible: Set<string> = new Set(), // pdf.js ids ("12R") of /OC widgets pdf.js drew; any other /OC widget is blank
+  ocVisible: Set<string>, // pdf.js ids ("12R") of /OC widgets pdf.js drew; any other /OC widget is blank
+  original: PDFDocumentProxy, // the document as the editor shows it
+  onStage: (stage: 'checking' | 'saving') => void = () => {},
+  report?: (page: number, differing: number, limit: number) => void, // per-page check result (tests)
 ): Promise<Uint8Array> {
   // Decrypts owner- and user-password PDFs; the output is saved unencrypted.
   const doc = await PDFDocument.load(originalBytes, { password, preserveXFA: true });
   // Bake form fields into the page so our text isn't hidden under widgets and fields aren't left live.
   // XFA is dropped explicitly (pdf-lib would otherwise warn); viewers would show it instead of the flattened page.
+  await regenerateIfNeeded(doc);
   pinShownAppearances(doc, ocVisible);
   try {
     const form = doc.getForm();
@@ -44,10 +61,20 @@ export async function exportPdf(
   }
   stripActiveContent(doc);
   doc.catalog.delete(PDFName.of('Perms')); // usage-rights signatures (/UR3) are invalid once the file is modified
-  const docPages = doc.getPages();
+
+  // The guard: the flattened file, before our overlays, must render like the original. No other path to a download.
+  onStage('checking');
+  dropUnreachable(doc);
+  const checked = await doc.save();
+  await guard(original, checked.slice(), report); // pdf.js takes ownership of (detaches) the buffer it is given
+  onStage('saving');
+  // Overlays go onto exactly the bytes that passed the check (a fresh load also gives pdf-lib fresh content streams;
+  // streams written by the first save are cached and would silently drop anything drawn into them afterwards).
+  const out = await PDFDocument.load(checked);
+  const docPages = out.getPages();
   const images = new Map<string, PDFImage>();
   const fonts = new Map<string, PDFFont>();
-  const font = async (name: StandardFonts) => fonts.get(name) ?? fonts.set(name, await doc.embedFont(name)).get(name)!;
+  const font = async (name: StandardFonts) => fonts.get(name) ?? fonts.set(name, await out.embedFont(name)).get(name)!;
 
   for (const e of elements) {
     const page = docPages[e.pageIndex];
@@ -62,7 +89,7 @@ export async function exportPdf(
 
     if (e.type === 'sig') {
       let img = images.get(e.dataUrl!);
-      if (!img) images.set(e.dataUrl!, (img = await doc.embedPng(e.dataUrl!)));
+      if (!img) images.set(e.dataUrl!, (img = await out.embedPng(e.dataUrl!)));
       const [x, y] = vp.convertToPdfPoint(e.x, e.y + e.h!);
       page.drawImage(img, { x, y, width: e.w!, height: e.h!, rotate });
       continue;
@@ -99,8 +126,7 @@ export async function exportPdf(
     const lines = (e.text ?? '').split(/\r?\n/).flatMap((l) => wrap(clean(l).join('')));
     lines.forEach((line, i) => line && draw(line, e.x, e.y + 1.2 * size * i, f));
   }
-  dropUnreachable(doc); // flattened field dicts (with their /V values) and removed actions must not linger in the file
-  return doc.save();
+  return out.save();
 }
 
 // What you see is what you sign: make every widget's appearance exactly what pdf.js drew in the editor, so the
@@ -134,7 +160,9 @@ function pinShownAppearances(doc: PDFDocument, ocVisible: Set<string>) {
         const n = dict.lookupMaybe(AP, PDFDict)?.get(N);
         const nd = n && ctx.lookup(n);
         const state = dict.get(PDFName.of('AS'));
-        const pick = nd instanceof PDFDict ? nd.get(state instanceof PDFName ? state : Off) : n;
+        // Buttons without /AS draw /Off (as pdf.js does); any other widget draws a state only if /AS names one.
+        const key = state instanceof PDFName ? state : button(dict) ? Off : undefined;
+        const pick = nd instanceof PDFDict ? key && nd.get(key) : n;
         if (pick instanceof PDFRef && ctx.lookup(pick) instanceof PDFStream) shown = pick;
       }
     } catch {
@@ -184,6 +212,64 @@ function stripActiveContent(doc: PDFDocument) {
       else action?.delete(PDFName.of('Next'));
     }
   }
+}
+
+// With /NeedAppearances, viewers (and pdf.js) rebuild text/choice appearances from /V instead of the stored /AP.
+async function regenerateIfNeeded(doc: PDFDocument) {
+  try {
+    const form = doc.getForm();
+    if (String(form.acroForm.dict.lookup(PDFName.of('NeedAppearances'))) !== 'true') return;
+    const helvetica = await doc.embedFont(StandardFonts.Helvetica);
+    for (const f of form.getFields()) {
+      try {
+        const v = f instanceof PDFTextField ? f.getText() : f instanceof PDFDropdown || f instanceof PDFOptionList ? f.getSelected().join('') : '';
+        if (v?.trim()) (f as PDFTextField).updateAppearances(helvetica);
+      } catch {}
+    }
+  } catch {}
+}
+
+// Render every page of the original and of the candidate with pdf.js and compare pixels. Anything that can't be
+// shown to match - including any failure of the check itself - refuses the export.
+async function guard(original: PDFDocumentProxy, candidate: Uint8Array, report?: (page: number, differing: number, limit: number) => void) {
+  const task = openPdf(candidate);
+  const canvases = [0, 1].map(() => {
+    const c = document.createElement('canvas');
+    c.getContext('2d', { willReadFrequently: true }); // pdf.js reuses this context; we read it back
+    return c;
+  });
+  try {
+    const copy = await task.promise;
+    if (copy.numPages !== original.numPages) throw new Error('page count');
+    const longSide = original.numPages > 50 ? 400 : 600;
+    for (let i = 1; i <= original.numPages; i++) {
+      const [a, b] = await Promise.all([original.getPage(i), copy.getPage(i)]);
+      const va = a.getViewport({ scale: 1 }), vb = b.getViewport({ scale: 1 });
+      if (Math.abs(va.width - vb.width) > 0.5 || Math.abs(va.height - vb.height) > 0.5) throw new Error('page size');
+      const scale = Math.min(longSide / Math.max(va.width, va.height), Math.sqrt(5e5 / (va.width * va.height)));
+      const pa = await rasterize(a, scale, canvases[0]);
+      const pb = await rasterize(b, scale, canvases[1]);
+      let differing = 0;
+      for (let k = 0; k < pa.length; k += 4)
+        if (Math.abs(pa[k] - pb[k]) > 24 || Math.abs(pa[k + 1] - pb[k + 1]) > 24 || Math.abs(pa[k + 2] - pb[k + 2]) > 24) differing++;
+      const limit = Math.max(40, 0.0005 * (pa.length / 4));
+      report?.(i, differing, limit);
+      if (differing > limit) throw new Error(`page ${i}: ${differing} pixels differ`);
+    }
+  } catch (err) {
+    throw new UnsafeExport(String(err));
+  } finally {
+    task.destroy();
+    for (const c of canvases) c.width = c.height = 0;
+  }
+}
+
+async function rasterize(page: PDFPageProxy, scale: number, canvas: HTMLCanvasElement) {
+  const viewport = page.getViewport({ scale });
+  canvas.width = Math.max(1, Math.floor(viewport.width));
+  canvas.height = Math.max(1, Math.floor(viewport.height));
+  await page.render({ canvas, viewport, background: 'white', annotationMode: pdfjs.AnnotationMode.ENABLE }).promise;
+  return canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data;
 }
 
 function dropUnreachable(doc: PDFDocument) {
