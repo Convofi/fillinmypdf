@@ -51,7 +51,7 @@ let loadingTask: PDFDocumentLoadingTask | null = null;
 let loadGen = 0;
 let bytes: Uint8Array | null = null;
 let password = '';
-let ocVisible = new Set<string>(); // widgets on optional-content layers that pdf.js shows (export blanks the rest)
+let ocView = { widgets: new Set<string>(), hiddenGroups: new Set<string>() }; // optional content as pdf.js shows it
 let baseName = '';
 let pages: Page[] = [];
 let hasFields = false;
@@ -121,6 +121,7 @@ async function load(file: File) {
   let task: PDFDocumentLoadingTask;
   let info: Awaited<ReturnType<typeof readPage>>[];
   let ocShown = new Set<string>();
+  let ocHidden = new Set<string>();
   for (;;) {
     // pdf.js transfers the buffer it is given, so hand it a copy and keep the original for pdf-lib.
     task = openPdf(data.slice(), pw);
@@ -128,6 +129,8 @@ async function load(file: File) {
       const doc = await task.promise;
       const oc = await doc.getOptionalContentConfig();
       ocShown = new Set();
+      ocHidden = new Set();
+      for (const [id] of oc) if (!oc.isVisible({ type: 'OCG', id })) ocHidden.add(id);
       info = await Promise.all(Array.from({ length: doc.numPages }, (_, i) => doc.getPage(i + 1).then((p) => readPage(p, oc, ocShown))));
       break;
     } catch (err) {
@@ -145,7 +148,7 @@ async function load(file: File) {
   pdf = await task.promise;
   bytes = data;
   password = pw;
-  ocVisible = ocShown;
+  ocView = { widgets: ocShown, hiddenGroups: ocHidden };
   baseName = file.name.replace(/\.pdf$/i, '');
   els = [];
   cleanState = '[]';
@@ -594,7 +597,7 @@ downloadBtn.addEventListener('click', async () => {
   downloadBtn.textContent = 'Checking…';
   try {
     const stage = (s: 'checking' | 'saving') => (downloadBtn.textContent = s === 'checking' ? 'Checking…' : 'Saving…');
-    const out = await exportPdf(bytes, els.filter((e) => !typed(e) || e.text?.trim()), pages, password, ocVisible, pdf!, stage);
+    const out = await exportPdf(bytes, els.filter((e) => !typed(e) || e.text?.trim()), pages, password, ocView, pdf!, stage);
     const url = URL.createObjectURL(new Blob([out as BlobPart], { type: 'application/pdf' }));
     const a = document.createElement('a');
     a.href = url;

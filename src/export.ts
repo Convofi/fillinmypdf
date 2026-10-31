@@ -38,7 +38,9 @@ export async function exportPdf(
   elements: El[],
   pages: { viewport1: PageViewport }[],
   password = '',
-  ocVisible: Set<string>, // pdf.js ids ("12R") of /OC widgets pdf.js drew; any other /OC widget is blank
+  // Optional content as pdf.js shows it: /OC widgets it drew (pdf.js ids like "12R"; any other /OC widget is blank)
+  // and the layers it hides (forced OFF for every viewer and for printing).
+  oc: { widgets: Set<string>; hiddenGroups: Set<string> },
   original: PDFDocumentProxy, // the document as the editor shows it
   onStage: (stage: 'checking' | 'saving') => void = () => {},
   report?: (page: number, differing: number, limit: number) => void, // per-page check result (tests)
@@ -48,25 +50,28 @@ export async function exportPdf(
   // Bake form fields into the page so our text isn't hidden under widgets and fields aren't left live.
   // XFA is dropped explicitly (pdf-lib would otherwise warn); viewers would show it instead of the flattened page.
   await regenerateIfNeeded(doc);
-  pinShownAppearances(doc, ocVisible);
+  pinShownAppearances(doc, oc.widgets);
   try {
     const form = doc.getForm();
     form.deleteXFA();
     form.flatten({ updateFieldAppearances: false });
   } catch {
-    // Never fall back to a flatten that could print what wasn't shown: drop the widgets instead.
+    // Never fall back to a flatten that could print what wasn't shown: drop the widgets, and the form with its values.
     for (const page of doc.getPages()) {
       const annots = page.node.Annots();
       for (let i = (annots?.size() ?? 0) - 1; i >= 0; i--) if (annots!.lookupMaybe(i, PDFDict)?.get(PDFName.of('Subtype')) === PDFName.of('Widget')) annots!.remove(i);
     }
+    doc.catalog.delete(PDFName.of('AcroForm'));
   }
+  printFollowsView(doc, oc.hiddenGroups);
   stripActiveContent(doc);
   doc.catalog.delete(PDFName.of('Perms')); // usage-rights signatures (/UR3) are invalid once the file is modified
 
   // The guard: the flattened file, before our overlays, must render like the original. No other path to a download.
   onStage('checking');
   dropUnreachable(doc);
-  const checked = await doc.save();
+  // Never let pdf-lib rebuild appearances while saving (the form may be gone or malformed after the fallback).
+  const checked = await doc.save({ updateFieldAppearances: false });
   await guard(original, checked.slice(), report); // pdf.js takes ownership of (detaches) the buffer it is given
   onStage('saving');
   // Overlays go onto exactly the bytes that passed the check (a fresh load also gives pdf-lib fresh content streams;
@@ -127,7 +132,7 @@ export async function exportPdf(
     const lines = (e.text ?? '').split(/\r?\n/).flatMap((l) => wrap(clean(l).join('')));
     lines.forEach((line, i) => line && draw(line, e.x, e.y + 1.2 * size * i, f));
   }
-  return out.save();
+  return out.save({ updateFieldAppearances: false });
 }
 
 // What you see is what you sign: make every widget's appearance exactly what pdf.js drew in the editor, so the
@@ -207,12 +212,40 @@ function stripActiveContent(doc: PDFDocument) {
     for (let i = (annots?.size() ?? 0) - 1; i >= 0; i--) {
       const annot = annots!.lookupMaybe(i, PDFDict);
       if (!annot) continue;
+      // Annotations pdf.js doesn't draw on the page but other viewers show (notes, pop-ups, media, 3D).
+      if (/^\/(Text|Popup|Sound|Movie|Screen|3D|RichMedia|Projection|TrapNet)$/.test(String(annot.get(PDFName.of('Subtype'))))) {
+        annots!.remove(i);
+        continue;
+      }
+      annot.delete(PDFName.of('Popup'));
       annot.delete(AA);
       const action = annot.lookupMaybe(A, PDFDict);
       if (action && !allowed(action)) annots!.remove(i);
       else action?.delete(PDFName.of('Next'));
     }
   }
+}
+
+// Optional content: viewers and printers may switch layers by usage (/AS: print vs view) or alternate configs.
+// Pin the default config to what pdf.js showed: no usage rules, no alternates, every hidden layer OFF.
+function printFollowsView(doc: PDFDocument, hiddenGroups: Set<string>) {
+  const ocp = doc.catalog.lookupMaybe(PDFName.of('OCProperties'), PDFDict);
+  if (!ocp) return;
+  ocp.delete(PDFName.of('Configs'));
+  const d = ocp.lookupMaybe(PDFName.of('D'), PDFDict) ?? ocp.context.obj({});
+  ocp.set(PDFName.of('D'), d);
+  d.delete(PDFName.of('AS'));
+  const id = (r: PDFObject) => (r instanceof PDFRef ? `${r.objectNumber}R${r.generationNumber || ''}` : '');
+  const hidden = (ocp.lookupMaybe(PDFName.of('OCGs'), PDFArray)?.asArray() ?? []).filter((r) => hiddenGroups.has(id(r)));
+  const on = d.lookupMaybe(PDFName.of('ON'), PDFArray);
+  for (let i = (on?.size() ?? 0) - 1; i >= 0; i--) if (hiddenGroups.has(id(on!.get(i)))) on!.remove(i);
+  const off = d.lookupMaybe(PDFName.of('OFF'), PDFArray) ?? ocp.context.obj([]);
+  d.set(PDFName.of('OFF'), off);
+  for (const r of hidden) if (!off.asArray().some((x) => id(x) === id(r))) off.push(r);
+  // Lock them too, so a viewer's layers panel can't switch hidden content back on.
+  const locked = d.lookupMaybe(PDFName.of('Locked'), PDFArray) ?? ocp.context.obj([]);
+  d.set(PDFName.of('Locked'), locked);
+  for (const r of hidden) if (!locked.asArray().some((x) => id(x) === id(r))) locked.push(r);
 }
 
 // PDF 32000 §12.5.5 (what pdf.js does): transform the appearance's /BBox by its /Matrix, then scale and translate
@@ -227,13 +260,14 @@ function fitToRect(doc: PDFDocument, widget: PDFDict, appearance: PDFRef): PDFRe
   const [a, b, c, d, e, f] = nums(ap.lookup(PDFName.of('Matrix'))) ?? [1, 0, 0, 1, 0, 0];
   if (!rect || !bbox || rect.length !== 4 || bbox.length !== 4 || [...rect, ...bbox, a, b, c, d, e, f].some((n) => !Number.isFinite(n))) throw new Error('geometry');
   const pts = [[bbox[0], bbox[1]], [bbox[2], bbox[1]], [bbox[0], bbox[3]], [bbox[2], bbox[3]]].map(([x, y]) => [a * x + c * y + e, b * x + d * y + f]);
-  const [minX, minY] = [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1]))];
-  const [boxW, boxH] = [Math.max(...pts.map((p) => p[0])) - minX, Math.max(...pts.map((p) => p[1])) - minY];
+  // pdf.js keeps this box in a Float32Array; match its rounding so the fit is bit-for-bit the same.
+  const [minX, minY] = [Math.fround(Math.min(...pts.map((p) => p[0]))), Math.fround(Math.min(...pts.map((p) => p[1])))];
+  const [boxW, boxH] = [Math.fround(Math.max(...pts.map((p) => p[0]))) - minX, Math.fround(Math.max(...pts.map((p) => p[1]))) - minY];
   const [rectW, rectH] = [Math.abs(rect[2] - rect[0]), Math.abs(rect[3] - rect[1])];
   if (!(boxW > 0 && boxH > 0 && rectW > 0 && rectH > 0)) throw new Error('empty geometry');
   const [sx, sy] = [rectW / boxW, rectH / boxH];
-  const near = (x: number, y: number) => Math.abs(x - y) < 1e-6;
-  if (near(sx, 1) && near(sy, 1) && near(minX, 0) && near(minY, 0)) return appearance; // already fits: pdf-lib's placement is exact
+  // Always apply the fit, even when it is nearly the identity: pdf.js scales by e.g. 0.99999993, and at zero
+  // tolerance that sub-pixel difference shows up in glyph anti-aliasing.
   return ctx.register(
     ctx.formXObject(
       [pushGraphicsState(), concatTransformationMatrix(sx, 0, 0, sy, -minX * sx, -minY * sy), drawObject('Ap'), popGraphicsState()],
@@ -270,20 +304,29 @@ async function guard(original: PDFDocumentProxy, candidate: Uint8Array, report?:
   try {
     const copy = await task.promise;
     if (copy.numPages !== original.numPages) throw new Error('page count');
-    const longSide = original.numPages > 50 ? 400 : 600;
+    const zoom = original.numPages > 50 ? 1.5 : 2.5; // device pixels per PDF point
     for (let i = 1; i <= original.numPages; i++) {
       const [a, b] = await Promise.all([original.getPage(i), copy.getPage(i)]);
       const va = a.getViewport({ scale: 1 }), vb = b.getViewport({ scale: 1 });
       if (Math.abs(va.width - vb.width) > 0.5 || Math.abs(va.height - vb.height) > 0.5) throw new Error('page size');
-      const scale = Math.min(longSide / Math.max(va.width, va.height), Math.sqrt(5e5 / (va.width * va.height)));
-      const pa = await rasterize(a, scale, canvases[0]);
-      const pb = await rasterize(b, scale, canvases[1]);
+      // Same canvas budget as the editor: ≤ 16M pixels and ≤ 16384 px per side.
+      const scale = Math.min(zoom, Math.sqrt(16e6 / (va.width * va.height)), 16384 / Math.max(va.width, va.height));
+      await rasterize(a, scale, canvases[0]);
+      await rasterize(b, scale, canvases[1]);
+      // Compare in strips so a 2.5× page never needs two full-page pixel copies at once.
+      const [ca, cb] = canvases.map((c) => c.getContext('2d')!);
+      const { width, height } = canvases[0];
       let differing = 0;
-      for (let k = 0; k < pa.length; k += 4)
-        if (Math.abs(pa[k] - pb[k]) > 24 || Math.abs(pa[k + 1] - pb[k + 1]) > 24 || Math.abs(pa[k + 2] - pb[k + 2]) > 24) differing++;
-      const limit = Math.max(40, 0.0005 * (pa.length / 4));
-      report?.(i, differing, limit);
-      if (differing > limit) throw new Error(`page ${i}: ${differing} pixels differ`);
+      for (let y = 0; y < height; y += 256) {
+        const h = Math.min(256, height - y);
+        const pa = ca.getImageData(0, y, width, h).data;
+        const pb = cb.getImageData(0, y, width, h).data;
+        for (let k = 0; k < pa.length; k += 4)
+          if (Math.abs(pa[k] - pb[k]) > 24 || Math.abs(pa[k + 1] - pb[k + 1]) > 24 || Math.abs(pa[k + 2] - pb[k + 2]) > 24) differing++;
+      }
+      // Zero tolerance: the clean corpus renders identically, and a single changed digit is only a few pixels.
+      report?.(i, differing, 0);
+      if (differing > 0) throw new Error(`page ${i}: ${differing} pixels differ`);
     }
   } catch (err) {
     throw new UnsafeExport(String(err));
@@ -298,7 +341,6 @@ async function rasterize(page: PDFPageProxy, scale: number, canvas: HTMLCanvasEl
   canvas.width = Math.max(1, Math.floor(viewport.width));
   canvas.height = Math.max(1, Math.floor(viewport.height));
   await page.render({ canvas, viewport, background: 'white', annotationMode: pdfjs.AnnotationMode.ENABLE }).promise;
-  return canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data;
 }
 
 function dropUnreachable(doc: PDFDocument) {
