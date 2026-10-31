@@ -32,3 +32,5 @@
 - Is my signature stored? Only in your own browser; remove it any time from the Sign dialog.
 - Does it work on a phone? Yes, in Safari and Chrome. Pinch to zoom in on a field.
 - Can I edit text that is already in the PDF? No. You can add text, check marks and signatures on top; existing content stays as it is.
+
+Built by ConvoFi (https://convofi.com).

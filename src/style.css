@@ -135,12 +135,15 @@ button.wordmark:hover { background: none; opacity: 0.75; }
 .landing li { margin: 6px 0; }
 .checks { list-style: none; margin: 0; padding: 0; }
 .checks li { position: relative; padding-left: 26px; }
-.checks li::before { content: "✓"; position: absolute; left: 2px; color: var(--accent); font-weight: 600; }
+.checks li::before { content: "✕"; position: absolute; left: 2px; color: var(--muted); font-weight: 600; }
 .landing dl { margin: 0; }
 .landing dt { margin-top: 20px; font-size: 16px; }
 .landing dt:first-child { margin-top: 0; }
 .landing dd { margin: 4px 0 0; font-size: 15px; color: var(--muted); }
-.landing footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+.landing footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; text-align: center; }
+.maker { color: var(--text); text-decoration: none; white-space: nowrap; }
+.maker:hover { text-decoration: underline; }
+.maker img { height: 16px; width: auto; margin-right: 6px; vertical-align: middle; }
 
 /* Top bar */
 .bar {

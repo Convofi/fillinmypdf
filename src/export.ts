@@ -1,5 +1,6 @@
 import {
   PDFArray, PDFDict, PDFDocument, PDFDropdown, PDFName, PDFOptionList, PDFRef, PDFStream, PDFTextField, StandardFonts, degrees, rgb,
+  concatTransformationMatrix, drawObject, popGraphicsState, pushGraphicsState,
   type PDFFont, type PDFImage, type PDFObject,
 } from '@cantoo/pdf-lib';
 import * as pdfjs from 'pdfjs-dist';
@@ -163,7 +164,7 @@ function pinShownAppearances(doc: PDFDocument, ocVisible: Set<string>) {
         // Buttons without /AS draw /Off (as pdf.js does); any other widget draws a state only if /AS names one.
         const key = state instanceof PDFName ? state : button(dict) ? Off : undefined;
         const pick = nd instanceof PDFDict ? key && nd.get(key) : n;
-        if (pick instanceof PDFRef && ctx.lookup(pick) instanceof PDFStream) shown = pick;
+        if (pick instanceof PDFRef && ctx.lookup(pick) instanceof PDFStream) shown = fitToRect(doc, dict, pick);
       }
     } catch {
       shown = empty;
@@ -212,6 +213,34 @@ function stripActiveContent(doc: PDFDocument) {
       else action?.delete(PDFName.of('Next'));
     }
   }
+}
+
+// PDF 32000 §12.5.5 (what pdf.js does): transform the appearance's /BBox by its /Matrix, then scale and translate
+// that box onto the widget's /Rect. pdf-lib's flatten only translates, so wrap the appearance in a Rect-sized form
+// XObject that applies the fit; pdf-lib then places the wrapper at the Rect origin.
+function fitToRect(doc: PDFDocument, widget: PDFDict, appearance: PDFRef): PDFRef {
+  const ctx = doc.context;
+  const nums = (o: PDFObject | undefined) => (o instanceof PDFArray ? o.asArray().map((n) => Number(String(ctx.lookup(n)))) : undefined);
+  const rect = nums(widget.lookup(PDFName.of('Rect')));
+  const ap = (ctx.lookup(appearance) as PDFStream).dict;
+  const bbox = nums(ap.lookup(PDFName.of('BBox')));
+  const [a, b, c, d, e, f] = nums(ap.lookup(PDFName.of('Matrix'))) ?? [1, 0, 0, 1, 0, 0];
+  if (!rect || !bbox || rect.length !== 4 || bbox.length !== 4 || [...rect, ...bbox, a, b, c, d, e, f].some((n) => !Number.isFinite(n))) throw new Error('geometry');
+  const pts = [[bbox[0], bbox[1]], [bbox[2], bbox[1]], [bbox[0], bbox[3]], [bbox[2], bbox[3]]].map(([x, y]) => [a * x + c * y + e, b * x + d * y + f]);
+  const [minX, minY] = [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1]))];
+  const [boxW, boxH] = [Math.max(...pts.map((p) => p[0])) - minX, Math.max(...pts.map((p) => p[1])) - minY];
+  const [rectW, rectH] = [Math.abs(rect[2] - rect[0]), Math.abs(rect[3] - rect[1])];
+  if (!(boxW > 0 && boxH > 0 && rectW > 0 && rectH > 0)) throw new Error('empty geometry');
+  const [sx, sy] = [rectW / boxW, rectH / boxH];
+  const near = (x: number, y: number) => Math.abs(x - y) < 1e-6;
+  if (near(sx, 1) && near(sy, 1) && near(minX, 0) && near(minY, 0)) return appearance; // already fits: pdf-lib's placement is exact
+  return ctx.register(
+    ctx.formXObject(
+      [pushGraphicsState(), concatTransformationMatrix(sx, 0, 0, sy, -minX * sx, -minY * sy), drawObject('Ap'), popGraphicsState()],
+      // The appearance's own /BBox does the clipping (as in pdf.js); a tight wrapper box would add a second clip edge.
+      { BBox: [-rectW, -rectH, 2 * rectW, 2 * rectH], Resources: { XObject: { Ap: appearance } } },
+    ),
+  );
 }
 
 // With /NeedAppearances, viewers (and pdf.js) rebuild text/choice appearances from /V instead of the stored /AP.
