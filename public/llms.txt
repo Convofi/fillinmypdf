@@ -32,5 +32,7 @@
 - Is my signature stored? Only in your own browser; remove it any time from the Sign dialog.
 - Does it work on a phone? Yes, in Safari and Chrome. Pinch to zoom in on a field.
 - Can I edit text that is already in the PDF? No. You can add text, check marks and signatures on top; existing content stays as it is.
+- Can I check that it really works this way? Yes. The code is open source under the MIT license, and the page can be inspected in your browser's developer tools: there are no requests carrying your document.
 
+Source code: https://github.com/convofi/fillinmypdf (MIT).
 Built by ConvoFi (https://convofi.com).

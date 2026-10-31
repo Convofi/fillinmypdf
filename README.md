@@ -1,6 +1,7 @@
 # Fill In My PDF
 
-Built by [ConvoFi](https://convofi.com).
+Built by [ConvoFi](https://convofi.com). Open source under the MIT license. Security reports: see [SECURITY.md](SECURITY.md).
+Source: https://github.com/convofi/fillinmypdf
 
 Fill in and sign PDFs in the browser. Drop a PDF, click to type, place check marks and a drawn
 signature, then download a flattened copy. No accounts, no uploads, no server.

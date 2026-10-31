@@ -27,7 +27,18 @@
         "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
         "description": "Fill in and sign any PDF for free in your browser. No account, no upload: your file never leaves your device. Works with fillable government forms and scanned PDFs.",
         "author": { "@type": "Organization", "name": "ConvoFi", "url": "https://convofi.com" },
-        "publisher": { "@type": "Organization", "name": "ConvoFi", "url": "https://convofi.com" }
+        "publisher": { "@type": "Organization", "name": "ConvoFi", "url": "https://convofi.com" },
+        "license": "https://opensource.org/license/mit"
+      }
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareSourceCode",
+        "name": "Fill In My PDF",
+        "codeRepository": "https://github.com/convofi/fillinmypdf",
+        "license": "https://opensource.org/license/mit",
+        "author": { "@type": "Organization", "name": "ConvoFi", "url": "https://convofi.com" }
       }
     </script>
     <script type="application/ld+json">
@@ -40,7 +51,8 @@
           { "@type": "Question", "name": "Does it work with scanned PDFs?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. You can type and sign anywhere on any page, whether or not the PDF has form fields." } },
           { "@type": "Question", "name": "Is my signature stored?", "acceptedAnswer": { "@type": "Answer", "text": "Only in your own browser, so you don't have to draw it again. You can remove it any time from the Sign dialog." } },
           { "@type": "Question", "name": "Does it work on a phone?", "acceptedAnswer": { "@type": "Answer", "text": "Yes, in Safari and Chrome. Pinch to zoom in on a field." } },
-          { "@type": "Question", "name": "Can I edit text that is already in the PDF?", "acceptedAnswer": { "@type": "Answer", "text": "No. You can add text, check marks, and signatures on top of the document, but existing content stays as it is." } }
+          { "@type": "Question", "name": "Can I edit text that is already in the PDF?", "acceptedAnswer": { "@type": "Answer", "text": "No. You can add text, check marks, and signatures on top of the document, but existing content stays as it is." } },
+          { "@type": "Question", "name": "Can I check that it really works this way?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. The code is open source under the MIT license, and the page can be inspected in your browser's developer tools: there are no requests carrying your document." } }
         ]
       }
     </script>
@@ -99,9 +111,14 @@
             <dd><p>Yes, in Safari and Chrome. Pinch to zoom in on a field.</p></dd>
             <dt><strong>Can I edit text that is already in the PDF?</strong></dt>
             <dd><p>No. You can add text, check marks, and signatures on top of the document, but existing content stays as it is.</p></dd>
+            <dt><strong>Can I check that it really works this way?</strong></dt>
+            <dd><p>Yes. The code is open source under the MIT license, and the page can be inspected in your browser's developer tools: there are no requests carrying your document.</p></dd>
           </dl>
         </section>
-        <footer>Fill In My PDF · Free, no account, nothing uploaded. · Built by <a class="maker" href="https://convofi.com" rel="noopener" target="_blank"><img src="/convofi-mark.png" alt="" width="13" height="16" />ConvoFi</a></footer>
+        <footer>
+          <span class="nowrap">Fill In My PDF · Free, no account, nothing uploaded. ·</span>
+          <span class="nowrap">Built by <a class="maker" href="https://convofi.com" rel="noopener" target="_blank"><img src="/convofi-mark.png" alt="" width="13" height="16" />ConvoFi</a> · <a class="quiet-link" href="https://github.com/convofi/fillinmypdf" rel="noopener" target="_blank">Open source</a></span>
+        </footer>
       </div>
     </main>
     <div id="editor" hidden>
