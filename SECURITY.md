@@ -2,7 +2,8 @@
 
 Fill In My PDF runs entirely in the browser. Documents, typed text, passwords and
 signatures never leave the user's device. The main security property we defend is:
-**the downloaded PDF shows exactly what the user saw on screen, and nothing else.**
+**the downloaded PDF renders, in pdf.js, exactly what the editor showed; non-visual differences and other
+viewers' rendering quirks are limited by the checks listed in `src/export.ts` and are in scope for reports.**
 
 ## Reporting a vulnerability
 

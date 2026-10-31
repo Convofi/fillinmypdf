@@ -1,10 +1,11 @@
 import {
   PDFArray, PDFDict, PDFDocument, PDFDropdown, PDFName, PDFOptionList, PDFRef, PDFStream, PDFTextField, StandardFonts, degrees, rgb,
-  concatTransformationMatrix, drawObject, popGraphicsState, pushGraphicsState,
+  beginMarkedContent, concatTransformationMatrix, drawObject, endMarkedContent, popGraphicsState, pushGraphicsState,
   type PDFFont, type PDFImage, type PDFObject,
 } from '@cantoo/pdf-lib';
 import * as pdfjs from 'pdfjs-dist';
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from 'pdfjs-dist';
+import { xrefConsistentBytes } from './xref';
 
 // One set of pdf.js options for the editor and for the export check, so both see the file the same way.
 export const pdfOptions = {
@@ -43,14 +44,25 @@ export async function exportPdf(
   oc: { widgets: Set<string>; hiddenGroups: Set<string> },
   original: PDFDocumentProxy, // the document as the editor shows it
   onStage: (stage: 'checking' | 'saving') => void = () => {},
-  report?: (page: number, differing: number, limit: number) => void, // per-page check result (tests)
+  report?: (page: number, differing: number, maxTile: number) => void, // per-page check result (tests)
 ): Promise<Uint8Array> {
+  // pdf-lib must see exactly the objects pdf.js resolved through the xref (see xref.ts); anything else is refused.
+  let consistent: ReturnType<typeof xrefConsistentBytes>;
+  try {
+    consistent = xrefConsistentBytes(originalBytes);
+  } catch (err) {
+    throw new UnsafeExport(String(err));
+  }
   // Decrypts owner- and user-password PDFs; the output is saved unencrypted.
-  const doc = await PDFDocument.load(originalBytes, { password, preserveXFA: true });
+  const doc = await PDFDocument.load(consistent.bytes, { password, preserveXFA: true });
+  if (String(doc.context.trailerInfo.Root) !== consistent.root || doc.getPageCount() !== original.numPages)
+    throw new UnsafeExport('pdf-lib and pdf.js disagree on the document structure');
+  // Flattened widget appearances are wrapped in this (unguessable) marked-content tag so the text check can tell them apart.
+  const widgetTag = `FIMPW${crypto.getRandomValues(new Uint32Array(2)).join('')}`;
   // Bake form fields into the page so our text isn't hidden under widgets and fields aren't left live.
   // XFA is dropped explicitly (pdf-lib would otherwise warn); viewers would show it instead of the flattened page.
   await regenerateIfNeeded(doc);
-  pinShownAppearances(doc, oc.widgets);
+  pinShownAppearances(doc, oc.widgets, widgetTag);
   try {
     const form = doc.getForm();
     form.deleteXFA();
@@ -72,7 +84,7 @@ export async function exportPdf(
   dropUnreachable(doc);
   // Never let pdf-lib rebuild appearances while saving (the form may be gone or malformed after the fallback).
   const checked = await doc.save({ updateFieldAppearances: false });
-  await guard(original, checked.slice(), report); // pdf.js takes ownership of (detaches) the buffer it is given
+  await guard(original, checked.slice(), widgetTag, report); // pdf.js takes ownership of (detaches) the buffer it is given
   onStage('saving');
   // Overlays go onto exactly the bytes that passed the check (a fresh load also gives pdf-lib fresh content streams;
   // streams written by the first save are cached and would silently drop anything drawn into them afterwards).
@@ -139,7 +151,7 @@ export async function exportPdf(
 // flatten (and any viewer, for widgets pdf-lib leaves as annotations) shows nothing else. pdf.js skips Hidden/NoView
 // widgets and those on hidden optional-content layers, and draws the /AS state; pdf-lib would draw them all, pick
 // button states by /V, and regenerate missing appearances. Every widget on every page counts, not just the field tree.
-function pinShownAppearances(doc: PDFDocument, ocVisible: Set<string>) {
+function pinShownAppearances(doc: PDFDocument, ocVisible: Set<string>, tag: string) {
   const ctx = doc.context;
   const [AP, N, Off] = ['AP', 'N', 'Off'].map((k) => PDFName.of(k));
   const empty = ctx.register(ctx.formXObject([], { BBox: [0, 0, 0, 0] }));
@@ -169,7 +181,7 @@ function pinShownAppearances(doc: PDFDocument, ocVisible: Set<string>) {
         // Buttons without /AS draw /Off (as pdf.js does); any other widget draws a state only if /AS names one.
         const key = state instanceof PDFName ? state : button(dict) ? Off : undefined;
         const pick = nd instanceof PDFDict ? key && nd.get(key) : n;
-        if (pick instanceof PDFRef && ctx.lookup(pick) instanceof PDFStream) shown = fitToRect(doc, dict, pick);
+        if (pick instanceof PDFRef && ctx.lookup(pick) instanceof PDFStream) shown = fitToRect(doc, dict, pick, tag);
       }
     } catch {
       shown = empty;
@@ -194,6 +206,9 @@ function stripActiveContent(doc: PDFDocument) {
   doc.catalog.delete(PDFName.of('OpenAction'));
   doc.catalog.delete(AA);
   doc.catalog.lookupMaybe(PDFName.of('Names'), PDFDict)?.delete(PDFName.of('JavaScript'));
+  // Document-level attachments aren't shown on any page; attachments with a visible icon (FileAttachment) stay.
+  doc.catalog.lookupMaybe(PDFName.of('Names'), PDFDict)?.delete(PDFName.of('EmbeddedFiles'));
+  doc.catalog.delete(PDFName.of('AF'));
   // Outline items: keep the tree, drop any action that isn't plain navigation.
   const seen = new Set<PDFDict>();
   const outline = (item: PDFDict | undefined) => {
@@ -213,10 +228,14 @@ function stripActiveContent(doc: PDFDocument) {
       const annot = annots!.lookupMaybe(i, PDFDict);
       if (!annot) continue;
       // Annotations pdf.js doesn't draw on the page but other viewers show (notes, pop-ups, media, 3D).
-      if (/^\/(Text|Popup|Sound|Movie|Screen|3D|RichMedia|Projection|TrapNet)$/.test(String(annot.get(PDFName.of('Subtype'))))) {
+      // Annotations pdf.js doesn't draw on the page but other viewers show (pop-ups, media, 3D, icon-less notes).
+      // A note with an appearance is drawn, so it stays - without its pop-up text.
+      const subtype = String(annot.get(PDFName.of('Subtype')));
+      if (/^\/(Popup|Sound|Movie|Screen|3D|RichMedia|Projection|TrapNet)$/.test(subtype) || (subtype === '/Text' && !annot.has(PDFName.of('AP')))) {
         annots!.remove(i);
         continue;
       }
+      if (subtype === '/Text') for (const k of ['Contents', 'RC', 'T']) annot.delete(PDFName.of(k));
       annot.delete(PDFName.of('Popup'));
       annot.delete(AA);
       const action = annot.lookupMaybe(A, PDFDict);
@@ -251,7 +270,7 @@ function printFollowsView(doc: PDFDocument, hiddenGroups: Set<string>) {
 // PDF 32000 §12.5.5 (what pdf.js does): transform the appearance's /BBox by its /Matrix, then scale and translate
 // that box onto the widget's /Rect. pdf-lib's flatten only translates, so wrap the appearance in a Rect-sized form
 // XObject that applies the fit; pdf-lib then places the wrapper at the Rect origin.
-function fitToRect(doc: PDFDocument, widget: PDFDict, appearance: PDFRef): PDFRef {
+function fitToRect(doc: PDFDocument, widget: PDFDict, appearance: PDFRef, tag: string): PDFRef {
   const ctx = doc.context;
   const nums = (o: PDFObject | undefined) => (o instanceof PDFArray ? o.asArray().map((n) => Number(String(ctx.lookup(n)))) : undefined);
   const rect = nums(widget.lookup(PDFName.of('Rect')));
@@ -270,7 +289,7 @@ function fitToRect(doc: PDFDocument, widget: PDFDict, appearance: PDFRef): PDFRe
   // tolerance that sub-pixel difference shows up in glyph anti-aliasing.
   return ctx.register(
     ctx.formXObject(
-      [pushGraphicsState(), concatTransformationMatrix(sx, 0, 0, sy, -minX * sx, -minY * sy), drawObject('Ap'), popGraphicsState()],
+      [beginMarkedContent(tag), pushGraphicsState(), concatTransformationMatrix(sx, 0, 0, sy, -minX * sx, -minY * sy), drawObject('Ap'), popGraphicsState(), endMarkedContent()],
       // The appearance's own /BBox does the clipping (as in pdf.js); a tight wrapper box would add a second clip edge.
       { BBox: [-rectW, -rectH, 2 * rectW, 2 * rectH], Resources: { XObject: { Ap: appearance } } },
     ),
@@ -294,7 +313,7 @@ async function regenerateIfNeeded(doc: PDFDocument) {
 
 // Render every page of the original and of the candidate with pdf.js and compare pixels. Anything that can't be
 // shown to match - including any failure of the check itself - refuses the export.
-async function guard(original: PDFDocumentProxy, candidate: Uint8Array, report?: (page: number, differing: number, limit: number) => void) {
+async function guard(original: PDFDocumentProxy, candidate: Uint8Array, widgetTag: string, report?: (page: number, differing: number, maxTile: number) => void) {
   const task = openPdf(candidate);
   const canvases = [0, 1].map(() => {
     const c = document.createElement('canvas');
@@ -311,22 +330,34 @@ async function guard(original: PDFDocumentProxy, candidate: Uint8Array, report?:
       if (Math.abs(va.width - vb.width) > 0.5 || Math.abs(va.height - vb.height) > 0.5) throw new Error('page size');
       // Same canvas budget as the editor: ≤ 16M pixels and ≤ 16384 px per side.
       const scale = Math.min(zoom, Math.sqrt(16e6 / (va.width * va.height)), 16384 / Math.max(va.width, va.height));
+      await sameTextAndAnnotations(a, b, widgetTag, i);
       await rasterize(a, scale, canvases[0]);
       await rasterize(b, scale, canvases[1]);
       // Compare in strips so a 2.5× page never needs two full-page pixel copies at once.
       const [ca, cb] = canvases.map((c) => c.getContext('2d')!);
       const { width, height } = canvases[0];
+      const tilesX = Math.ceil(width / 16);
       let differing = 0;
+      let maxTile = 0;
       for (let y = 0; y < height; y += 256) {
         const h = Math.min(256, height - y);
         const pa = ca.getImageData(0, y, width, h).data;
         const pb = cb.getImageData(0, y, width, h).data;
-        for (let k = 0; k < pa.length; k += 4)
-          if (Math.abs(pa[k] - pb[k]) > 24 || Math.abs(pa[k + 1] - pb[k + 1]) > 24 || Math.abs(pa[k + 2] - pb[k + 2]) > 24) differing++;
+        const tiles = new Uint16Array(tilesX * 16);
+        for (let k = 0, px = 0; k < pa.length; k += 4, px++) {
+          const d = Math.max(Math.abs(pa[k] - pb[k]), Math.abs(pa[k + 1] - pb[k + 1]), Math.abs(pa[k + 2] - pb[k + 2]));
+          if (d > 24) differing++;
+          if (d > 2) {
+            const t = ((Math.floor(px / width) >> 4) * tilesX) + ((px % width) >> 4);
+            maxTile = Math.max(maxTile, ++tiles[t]);
+          }
+        }
       }
-      // Zero tolerance: the clean corpus renders identically, and a single changed digit is only a few pixels.
-      report?.(i, differing, 0);
+      // Zero tolerance for visible change (a single changed digit is only a few pixels), and no faint clusters either:
+      // ≥ 8 slightly-different pixels in one 16×16 tile is near-invisible text, not anti-aliasing noise (≤ 4 measured).
+      report?.(i, differing, maxTile);
       if (differing > 0) throw new Error(`page ${i}: ${differing} pixels differ`);
+      if (maxTile >= 8) throw new Error(`page ${i}: faint change (${maxTile} pixels in one tile)`);
     }
   } catch (err) {
     throw new UnsafeExport(String(err));
@@ -334,6 +365,26 @@ async function guard(original: PDFDocumentProxy, candidate: Uint8Array, report?:
     task.destroy();
     for (const c of canvases) c.width = c.height = 0;
   }
+}
+
+// What a renderer would show isn't all a PDF says: compare the text pdf.js extracts (invisible OCR layers, white text)
+// and the annotations it reports (link targets, attachments). Flattened widgets add their own text, inside our tag;
+// annotations may only disappear (we strip some), never appear or change.
+async function sameTextAndAnnotations(a: PDFPageProxy, b: PDFPageProxy, widgetTag: string, i: number) {
+  const key = (t: { str: string; transform: number[] }) => `${t.str}@${t.transform.map((n) => n.toFixed(2)).join(',')}`;
+  const ta = (await a.getTextContent()).items.map((t) => key(t as { str: string; transform: number[] }));
+  const tb: string[] = [];
+  const stack: string[] = [];
+  for (const t of (await b.getTextContent({ includeMarkedContent: true })).items as Array<Record<string, any>>) {
+    if (t.type === 'beginMarkedContent' || t.type === 'beginMarkedContentProps') stack.push(t.tag);
+    else if (t.type === 'endMarkedContent') stack.pop();
+    else if (!stack.includes(widgetTag)) tb.push(key(t as { str: string; transform: number[] }));
+  }
+  if (ta.length !== tb.length || ta.some((k, j) => k !== tb[j])) throw new Error(`page ${i}: text differs`);
+  const sig = (x: Record<string, any>) =>
+    JSON.stringify([x.subtype, x.rect?.map((n: number) => n.toFixed(2)), x.url ?? null, x.unsafeUrl ?? null, x.dest ?? null, x.file?.filename ?? null, x.file?.content?.length ?? null]);
+  const before = new Set((await a.getAnnotations()).filter((x) => x.subtype !== 'Widget').map(sig));
+  for (const x of await b.getAnnotations()) if (x.subtype !== 'Widget' && !before.has(sig(x))) throw new Error(`page ${i}: annotation differs`);
 }
 
 async function rasterize(page: PDFPageProxy, scale: number, canvas: HTMLCanvasElement) {
