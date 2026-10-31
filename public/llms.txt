@@ -1,0 +1,33 @@
+# Fill In My PDF
+
+> Free web app at https://fillinmypdf.com/ to fill in and sign any PDF in the browser: no account, no upload, the file never leaves the device.
+
+## What it does
+
+- Opens any PDF (including fillable government forms, scanned documents and password-protected files) directly in the browser.
+- Detects form fields and highlights them: click a field to type, press Tab to move to the next one, click a checkbox to check it.
+- Adds text, check marks and a drawn signature anywhere on any page.
+- Downloads a flattened PDF that looks the same in every viewer.
+
+## Privacy and security
+
+- Client-side only: the whole app runs in the browser; there is no server doing the work.
+- No upload: the document is read from and saved back to the user's own disk.
+- No account, no sign-up.
+- Flattened output: form fields are baked into the page; scripts, auto-run and launch/submit actions are removed.
+- Strict Content-Security-Policy: scripts only from the site itself, no inline scripts, no connections to other servers.
+
+## Limitations
+
+- Text already in the PDF (including values pre-filled in form fields) cannot be edited; new content is added on top.
+- Text typed into a multiline field can overflow past the field's bottom edge.
+- On phones there is no in-app zoom; use pinch-to-zoom to reach small fields.
+
+## FAQ
+
+- Is it safe for personal documents like tax or immigration forms? Yes. The file is opened, edited in memory and saved back to your disk; it is never sent anywhere and the app works offline once loaded.
+- Does it work with fillable government forms? Yes. Fields are detected and highlighted; Tab moves between them; the download is flattened.
+- Does it work with scanned PDFs? Yes. You can type and sign anywhere on any page.
+- Is my signature stored? Only in your own browser; remove it any time from the Sign dialog.
+- Does it work on a phone? Yes, in Safari and Chrome. Pinch to zoom in on a field.
+- Can I edit text that is already in the PDF? No. You can add text, check marks and signatures on top; existing content stays as it is.

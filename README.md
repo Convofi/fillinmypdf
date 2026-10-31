@@ -22,9 +22,9 @@ the original bytes, flattens any form, draws the overlays and saves a new file.
 
 ## Privacy and security
 
-- Client-side only: the PDF is read with the File API and never leaves the device. The only thing
-  stored is your drawn signature, in this browser's localStorage ("Forget saved signature" in the
-  signature dialog removes it).
+- Client-side only: the PDF never leaves the device. Only your drawn signature is stored, in this
+  browser's localStorage ("Forget saved signature" in the signature dialog removes it).
+- Vercel Web Analytics counts page views and downloads. It is cookieless and never sees document content.
 - Strict Content-Security-Policy (header on Vercel, `<meta>` in the built `index.html`):
   `script-src 'self' 'wasm-unsafe-eval'` (WebAssembly image decoders only; no JS `eval`), no inline
   scripts or styles, `connect-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`.

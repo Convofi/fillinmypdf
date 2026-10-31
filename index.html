@@ -2,29 +2,118 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Fill In My PDF</title>
+    <meta name="description" content="Fill in and sign any PDF for free in your browser. No account, no upload: your file never leaves your device. Works with fillable government forms and scanned PDFs." />
+    <link rel="canonical" href="https://fillinmypdf.com/" />
+    <meta property="og:title" content="Fill In My PDF" />
+    <meta property="og:description" content="Fill in and sign any PDF for free in your browser. No account, no upload: your file never leaves your device. Works with fillable government forms and scanned PDFs." />
+    <meta property="og:url" content="https://fillinmypdf.com/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Fill In My PDF" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1c1c1c" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Fill In My PDF",
+        "url": "https://fillinmypdf.com/",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "Web",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "description": "Fill in and sign any PDF for free in your browser. No account, no upload: your file never leaves your device. Works with fillable government forms and scanned PDFs."
+      }
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          { "@type": "Question", "name": "Is it safe for personal documents like tax forms or immigration forms?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. The file is opened by your browser from your own disk, edited in memory, and saved back to your disk. It is never sent anywhere. You can turn off your internet connection after the page loads and it will still work." } },
+          { "@type": "Question", "name": "Does it work with fillable government forms?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Form fields are detected and highlighted. Click one to type into it, press Tab to move to the next, and click a checkbox to check it. The downloaded file is flattened, so it looks the same in every viewer." } },
+          { "@type": "Question", "name": "Does it work with scanned PDFs?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. You can type and sign anywhere on any page, whether or not the PDF has form fields." } },
+          { "@type": "Question", "name": "Is my signature stored?", "acceptedAnswer": { "@type": "Answer", "text": "Only in your own browser, so you don't have to draw it again. You can remove it any time from the Sign dialog." } },
+          { "@type": "Question", "name": "Does it work on a phone?", "acceptedAnswer": { "@type": "Answer", "text": "Yes, in Safari and Chrome. Pinch to zoom in on a field." } },
+          { "@type": "Question", "name": "Can I edit text that is already in the PDF?", "acceptedAnswer": { "@type": "Answer", "text": "No. You can add text, check marks, and signatures on top of the document, but existing content stays as it is." } }
+        ]
+      }
+    </script>
   </head>
   <body>
-    <div id="empty" class="empty">
-      <div class="drop">
-        <div class="big">Drop a PDF here</div>
-        <div class="small">or click to open</div>
-        <div class="small">Your file never leaves your device.</div>
+    <main id="empty">
+      <section class="hero">
+        <div class="wordmark">Fill In My PDF</div>
+        <button type="button" id="drop" class="drop">
+          <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h10l7 7v16a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3z" /><path d="M19 3v7h7" /><path d="M10.5 22.5c1.8-3.2 3.2-3.4 4.2-1.3s2.6 2.1 5.8-2.2" /></svg>
+          <span class="drop-title">Drop your PDF here</span>
+          <span class="muted">or click to open</span>
+        </button>
+        <p class="tagline">Free. No account. Your file never leaves your device.</p>
+      </section>
+      <div class="landing">
+        <h1>Fill in and sign any PDF, right in your browser.</h1>
+        <section>
+          <h2>How it works</h2>
+          <ol>
+            <li>Drop in a PDF.</li>
+            <li>Click a field and type. Draw your signature once; place it with a click.</li>
+            <li>Download the finished file.</li>
+          </ol>
+        </section>
+        <section>
+          <h2>Why it's free</h2>
+          <p>The whole app runs inside your browser. There is no server doing work for you, so there is almost nothing for us to pay for, and nothing to charge you for.</p>
+        </section>
+        <section>
+          <h2>What we never do</h2>
+          <ul>
+            <li>Upload your document.</li>
+            <li>Ask you to create an account.</li>
+            <li>Store your files, your text, or your signature on any server.</li>
+            <li>Add a watermark.</li>
+            <li>Limit how many files you can sign.</li>
+          </ul>
+        </section>
+        <section>
+          <h2>Questions</h2>
+          <dl>
+            <dt><strong>Is it safe for personal documents like tax forms or immigration forms?</strong></dt>
+            <dd><p>Yes. The file is opened by your browser from your own disk, edited in memory, and saved back to your disk. It is never sent anywhere. You can turn off your internet connection after the page loads and it will still work.</p></dd>
+            <dt><strong>Does it work with fillable government forms?</strong></dt>
+            <dd><p>Yes. Form fields are detected and highlighted. Click one to type into it, press Tab to move to the next, and click a checkbox to check it. The downloaded file is flattened, so it looks the same in every viewer.</p></dd>
+            <dt><strong>Does it work with scanned PDFs?</strong></dt>
+            <dd><p>Yes. You can type and sign anywhere on any page, whether or not the PDF has form fields.</p></dd>
+            <dt><strong>Is my signature stored?</strong></dt>
+            <dd><p>Only in your own browser, so you don't have to draw it again. You can remove it any time from the Sign dialog.</p></dd>
+            <dt><strong>Does it work on a phone?</strong></dt>
+            <dd><p>Yes, in Safari and Chrome. Pinch to zoom in on a field.</p></dd>
+            <dt><strong>Can I edit text that is already in the PDF?</strong></dt>
+            <dd><p>No. You can add text, check marks, and signatures on top of the document, but existing content stays as it is.</p></dd>
+          </dl>
+        </section>
+        <footer>Fill In My PDF · Free, no account, nothing uploaded.</footer>
       </div>
-    </div>
+    </main>
     <div id="editor" hidden>
       <header class="bar">
-        <div class="left"><button id="open">Open</button><span id="name"></span><span id="pwnote" class="note" hidden>Download will not be password-protected.</span></div>
-        <div id="hint"></div>
+        <div class="left">
+          <button type="button" id="brand" class="wordmark">Fill In My PDF</button>
+          <button type="button" id="open" class="quiet">Open</button>
+          <span id="name"></span>
+          <span id="pwnote" class="note" hidden>Download will not be password-protected.</span>
+        </div>
+        <div id="hint" aria-live="polite"></div>
         <div class="right">
-          <button id="check">✓ Check</button>
-          <button id="sign">Sign</button>
-          <button id="download" class="primary">Download</button>
+          <button type="button" id="check">✓ Check</button>
+          <button type="button" id="sign">Sign</button>
+          <button type="button" id="download" class="primary">Download</button>
         </div>
       </header>
-      <main id="pages"></main>
+      <div id="pages"></div>
     </div>
     <input type="file" id="file" accept="application/pdf" hidden />
     <script type="module" src="/src/main.ts"></script>

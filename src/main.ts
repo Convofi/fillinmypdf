@@ -5,6 +5,10 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, PageViewpo
 import { exportPdf, type El } from './export';
 import { drawSignature, type Sig } from './signature';
 import { askPassword } from './password';
+import { inject, track } from '@vercel/analytics';
+
+// Cookieless page views + a bare 'download' count; served from our own origin (/_vercel/insights) on Vercel.
+inject({ mode: import.meta.env.PROD ? 'production' : 'development' });
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -40,6 +44,7 @@ let loadingTask: PDFDocumentLoadingTask | null = null;
 let loadGen = 0;
 let bytes: Uint8Array | null = null;
 let password = '';
+let ocVisible = new Set<string>(); // widgets on optional-content layers that pdf.js shows (export blanks the rest)
 let baseName = '';
 let pages: Page[] = [];
 let hasFields = false;
@@ -55,7 +60,11 @@ let lastWidth = 0;
 
 const toolbar = document.createElement('div');
 toolbar.className = 'toolbar';
-toolbar.innerHTML = `<button data-a="-">−</button><button data-a="+">+</button><button data-a="del">🗑</button>`;
+const icon = (d: string) => `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="${d}"/></svg>`;
+toolbar.innerHTML =
+  `<button type="button" data-a="-" aria-label="Smaller">${icon('M3.5 8h9')}</button>` +
+  `<button type="button" data-a="+" aria-label="Larger">${icon('M8 3.5v9M3.5 8h9')}</button>` +
+  `<button type="button" data-a="del" aria-label="Delete">${icon('M2.5 4.5h11M6.5 4.5V3h3v1.5M4 4.5l.7 8.5h6.6l.7-8.5')}</button>`;
 
 const cssWidth = () => Math.min(window.innerWidth - 48, 850);
 const editing = () => (document.activeElement as HTMLElement | null)?.isContentEditable ?? false;
@@ -71,11 +80,14 @@ function openFile(file: File) {
   load(file);
 }
 
-async function readPage(page: PDFPageProxy) {
+async function readPage(page: PDFPageProxy, oc: Awaited<ReturnType<PDFDocumentProxy['getOptionalContentConfig']>>, ocShown: Set<string>) {
   const viewport1 = page.getViewport({ scale: 1 });
   const fields: Field[] = [];
   for (const a of await page.getAnnotations()) {
-    if (fields.length >= 500) break; // a hostile file can carry thousands of widgets
+    try {
+      if (a.oc && oc.isVisible(a.oc)) ocShown.add(a.id);
+    } catch {}
+    if (fields.length >= 500) continue; // a hostile file can carry thousands of widgets
     if (a.subtype !== 'Widget' || !['Tx', 'Ch', 'Btn'].includes(a.fieldType) || a.hidden || a.noView || a.pushButton) continue;
     // Read-only is ignored (XFA logic sets it on ordinary blanks), except read-only multiline = barcode.
     if (a.readOnly && a.multiLine) continue;
@@ -101,6 +113,7 @@ async function load(file: File) {
   let pw = '';
   let task: PDFDocumentLoadingTask;
   let info: Awaited<ReturnType<typeof readPage>>[];
+  let ocShown = new Set<string>();
   for (;;) {
     // pdf.js transfers the buffer it is given, so hand it a copy and keep the original for pdf-lib.
     task = pdfjs.getDocument({
@@ -112,7 +125,9 @@ async function load(file: File) {
     });
     try {
       const doc = await task.promise;
-      info = await Promise.all(Array.from({ length: doc.numPages }, (_, i) => doc.getPage(i + 1).then(readPage)));
+      const oc = await doc.getOptionalContentConfig();
+      ocShown = new Set();
+      info = await Promise.all(Array.from({ length: doc.numPages }, (_, i) => doc.getPage(i + 1).then((p) => readPage(p, oc, ocShown))));
       break;
     } catch (err) {
       task.destroy();
@@ -129,6 +144,7 @@ async function load(file: File) {
   pdf = await task.promise;
   bytes = data;
   password = pw;
+  ocVisible = ocShown;
   baseName = file.name.replace(/\.pdf$/i, '');
   els = [];
   cleanState = '[]';
@@ -457,6 +473,18 @@ async function drawNew() {
   setMode('sig');
 }
 
+// A stored signature whose PNG doesn't decode would break every export: check it once at startup.
+const stored = savedSig();
+if (stored) {
+  const img = new Image();
+  img.src = stored.dataUrl;
+  img.decode().catch(() => {
+    try {
+      localStorage.removeItem(SIG_KEY);
+    } catch {}
+  });
+}
+
 function savedSig(): Sig | null {
   try {
     const s = JSON.parse(localStorage.getItem(SIG_KEY) ?? 'null');
@@ -551,8 +579,7 @@ addEventListener('drop', (ev) => {
   if (f) openFile(f);
 });
 
-emptyEl.addEventListener('click', () => fileInput.click());
-$('#open').addEventListener('click', () => fileInput.click());
+for (const id of ['#drop', '#brand', '#open']) $(id).addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => {
   const f = fileInput.files?.[0];
   fileInput.value = '';
@@ -565,7 +592,7 @@ downloadBtn.addEventListener('click', async () => {
   downloadBtn.disabled = true;
   downloadBtn.textContent = 'Working…';
   try {
-    const out = await exportPdf(bytes, els.filter((e) => !typed(e) || e.text?.trim()), pages, password);
+    const out = await exportPdf(bytes, els.filter((e) => !typed(e) || e.text?.trim()), pages, password, ocVisible);
     const url = URL.createObjectURL(new Blob([out as BlobPart], { type: 'application/pdf' }));
     const a = document.createElement('a');
     a.href = url;
@@ -575,6 +602,7 @@ downloadBtn.addEventListener('click', async () => {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
     cleanState = JSON.stringify(els);
+    track('download');
   } catch (err) {
     console.error(err);
     alert("Sorry, the PDF couldn't be created.");

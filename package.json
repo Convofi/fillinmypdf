@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@cantoo/pdf-lib": "2.11.1",
+    "@vercel/analytics": "2.0.1",
     "pdfjs-dist": "6.4.299",
     "signature_pad": "5.1.4"
   }

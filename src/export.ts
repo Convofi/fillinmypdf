@@ -1,6 +1,6 @@
 import {
-  PDFArray, PDFCheckBox, PDFDict, PDFDocument, PDFName, PDFRadioGroup, PDFRef, PDFStream, StandardFonts, degrees, rgb,
-  type PDFFont, type PDFForm, type PDFImage, type PDFObject,
+  PDFArray, PDFDict, PDFDocument, PDFName, PDFRef, PDFStream, StandardFonts, degrees, rgb,
+  type PDFFont, type PDFImage, type PDFObject,
 } from '@cantoo/pdf-lib';
 import type { PageViewport } from 'pdfjs-dist';
 
@@ -24,22 +24,26 @@ export async function exportPdf(
   elements: El[],
   pages: { viewport1: PageViewport }[],
   password = '',
+  ocVisible: Set<string> = new Set(), // pdf.js ids ("12R") of /OC widgets pdf.js drew; any other /OC widget is blank
 ): Promise<Uint8Array> {
   // Decrypts owner- and user-password PDFs; the output is saved unencrypted.
   const doc = await PDFDocument.load(originalBytes, { password, preserveXFA: true });
   // Bake form fields into the page so our text isn't hidden under widgets and fields aren't left live.
   // XFA is dropped explicitly (pdf-lib would otherwise warn); viewers would show it instead of the flattened page.
+  pinShownAppearances(doc, ocVisible);
   try {
     const form = doc.getForm();
     form.deleteXFA();
-    try {
-      pinShownAppearances(doc, form);
-      form.flatten({ updateFieldAppearances: false });
-    } catch {
-      form.flatten();
+    form.flatten({ updateFieldAppearances: false });
+  } catch {
+    // Never fall back to a flatten that could print what wasn't shown: drop the widgets instead.
+    for (const page of doc.getPages()) {
+      const annots = page.node.Annots();
+      for (let i = (annots?.size() ?? 0) - 1; i >= 0; i--) if (annots!.lookupMaybe(i, PDFDict)?.get(PDFName.of('Subtype')) === PDFName.of('Widget')) annots!.remove(i);
     }
-  } catch {}
+  }
   stripActiveContent(doc);
+  doc.catalog.delete(PDFName.of('Perms')); // usage-rights signatures (/UR3) are invalid once the file is modified
   const docPages = doc.getPages();
   const images = new Map<string, PDFImage>();
   const fonts = new Map<string, PDFFont>();
@@ -99,39 +103,85 @@ export async function exportPdf(
   return doc.save();
 }
 
-// What you see is what you sign: make each widget's flattened appearance exactly what pdf.js drew in the editor.
-// pdf.js skips Hidden/NoView/optional-content widgets and draws the /AS state; pdf-lib's flatten would draw them all,
-// pick button states by the field /V, and regenerate missing appearances from /V.
-function pinShownAppearances(doc: PDFDocument, form: PDFForm) {
-  const empty = doc.context.register(doc.context.formXObject([], { BBox: [0, 0, 0, 0] }));
-  for (const field of form.getFields()) {
-    const button = field instanceof PDFCheckBox || field instanceof PDFRadioGroup;
-    for (const w of field.acroField.getWidgets()) {
-      const n = w.dict.lookupMaybe(PDFName.of('AP'), PDFDict)?.get(PDFName.of('N'));
-      const nd = n && doc.context.lookup(n);
-      let shown = nd instanceof PDFDict ? nd.get(w.getAppearanceState() ?? PDFName.of('Off')) : n;
-      if (w.hasFlag(2) || w.hasFlag(32) || w.dict.has(PDFName.of('OC')) || !(shown instanceof PDFRef)) shown = empty;
-      w.dict.set(PDFName.of('AP'), doc.context.obj({ N: button ? { Off: shown } : shown }));
+// What you see is what you sign: make every widget's appearance exactly what pdf.js drew in the editor, so the
+// flatten (and any viewer, for widgets pdf-lib leaves as annotations) shows nothing else. pdf.js skips Hidden/NoView
+// widgets and those on hidden optional-content layers, and draws the /AS state; pdf-lib would draw them all, pick
+// button states by /V, and regenerate missing appearances. Every widget on every page counts, not just the field tree.
+function pinShownAppearances(doc: PDFDocument, ocVisible: Set<string>) {
+  const ctx = doc.context;
+  const [AP, N, Off] = ['AP', 'N', 'Off'].map((k) => PDFName.of(k));
+  const empty = ctx.register(ctx.formXObject([], { BBox: [0, 0, 0, 0] }));
+  const widgets = new Map<PDFDict, PDFRef | undefined>();
+  for (const page of doc.getPages()) {
+    const annots = page.node.Annots();
+    for (let i = 0; i < (annots?.size() ?? 0); i++) {
+      const ref = annots!.get(i);
+      const dict = annots!.lookupMaybe(i, PDFDict);
+      if (dict?.get(PDFName.of('Subtype')) === PDFName.of('Widget')) widgets.set(dict, ref instanceof PDFRef ? ref : undefined);
+    }
+  }
+  try {
+    for (const f of doc.getForm().getFields()) for (const w of f.acroField.getWidgets()) if (!widgets.has(w.dict)) widgets.set(w.dict, undefined); // not on any page: never drawn
+  } catch {}
+  const button = (d: PDFDict | undefined, depth = 0): boolean =>
+    !!d && depth < 32 && (d.has(PDFName.of('FT')) ? d.get(PDFName.of('FT')) === PDFName.of('Btn') : button(d.lookupMaybe(PDFName.of('Parent'), PDFDict), depth + 1));
+  for (const [dict, ref] of widgets) {
+    let shown: PDFObject | undefined = empty;
+    try {
+      const flags = Number(String(dict.lookup(PDFName.of('F')) ?? 0));
+      const ocShown = !dict.has(PDFName.of('OC')) || (!!ref && ocVisible.has(`${ref.objectNumber}R${ref.generationNumber || ''}`));
+      if (ref && !(flags & 2) && !(flags & 32) && ocShown) {
+        const n = dict.lookupMaybe(AP, PDFDict)?.get(N);
+        const nd = n && ctx.lookup(n);
+        const state = dict.get(PDFName.of('AS'));
+        const pick = nd instanceof PDFDict ? nd.get(state instanceof PDFName ? state : Off) : n;
+        if (pick instanceof PDFRef && ctx.lookup(pick) instanceof PDFStream) shown = pick;
+      }
+    } catch {
+      shown = empty;
+    }
+    try {
+      dict.set(AP, ctx.obj({ N: button(dict) ? { Off: shown } : shown }));
+    } catch {
+      dict.set(AP, ctx.obj({ N: empty }));
     }
   }
 }
 
-// The output is a flat signed document: no auto-run, page/annotation actions, scripts, launches or form submission.
+// The output is a flat signed document: only navigation survives (GoTo, URI to the web or mail, Named). Everything
+// else - scripts, launches, submission, media, remote/embedded go-tos, chained /Next actions - is removed.
 function stripActiveContent(doc: PDFDocument) {
   const [A, AA, S] = ['A', 'AA', 'S'].map((k) => PDFName.of(k));
+  const allowed = (a: PDFDict | undefined) => {
+    const s = String(a?.get(S));
+    if (s === '/URI') return /^\(?(https?:|mailto:)/i.test(String(a!.lookup(PDFName.of('URI')) ?? '').replace(/^<.*>$/, ''));
+    return s === '/GoTo' || s === '/Named';
+  };
   doc.catalog.delete(PDFName.of('OpenAction'));
   doc.catalog.delete(AA);
   doc.catalog.lookupMaybe(PDFName.of('Names'), PDFDict)?.delete(PDFName.of('JavaScript'));
+  // Outline items: keep the tree, drop any action that isn't plain navigation.
+  const seen = new Set<PDFDict>();
+  const outline = (item: PDFDict | undefined) => {
+    for (let it = item; it && !seen.has(it); it = it.lookupMaybe(PDFName.of('Next'), PDFDict)) {
+      seen.add(it);
+      const a = it.lookupMaybe(A, PDFDict);
+      if (a && !allowed(a)) it.delete(A);
+      else a?.delete(PDFName.of('Next'));
+      outline(it.lookupMaybe(PDFName.of('First'), PDFDict));
+    }
+  };
+  outline(doc.catalog.lookupMaybe(PDFName.of('Outlines'), PDFDict)?.lookupMaybe(PDFName.of('First'), PDFDict));
   for (const page of doc.getPages()) {
     page.node.delete(AA);
     const annots = page.node.Annots();
     for (let i = (annots?.size() ?? 0) - 1; i >= 0; i--) {
-      const annot = annots!.lookup(i);
-      if (!(annot instanceof PDFDict)) continue;
+      const annot = annots!.lookupMaybe(i, PDFDict);
+      if (!annot) continue;
       annot.delete(AA);
       const action = annot.lookupMaybe(A, PDFDict);
-      if (/^\/(JavaScript|Launch|SubmitForm|ImportData)$/.test(String(action?.get(S)))) annots!.remove(i);
-      else action?.delete(PDFName.of('Next')); // chained actions could be any of the above
+      if (action && !allowed(action)) annots!.remove(i);
+      else action?.delete(PDFName.of('Next'));
     }
   }
 }

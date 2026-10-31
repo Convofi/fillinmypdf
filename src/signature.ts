@@ -10,7 +10,7 @@ export function drawSignature(onForget?: () => void): Promise<Sig | null> {
     modal.className = 'modal';
     modal.innerHTML = `<div class="sheet">
       <div class="sheet-title">Draw your signature</div>
-      <canvas></canvas>
+      <div class="pad"><canvas></canvas><div class="pad-line"></div><div class="pad-hint">Sign above</div></div>
       <div class="sheet-row">
         <button data-a="clear">Clear</button>${onForget ? '<button data-a="forget" class="link">Forget saved signature</button>' : ''}<span></span>
         <button data-a="cancel">Cancel</button>
@@ -24,6 +24,8 @@ export function drawSignature(onForget?: () => void): Promise<Sig | null> {
     canvas.getContext('2d')!.scale(dpr, dpr);
     const pad = new SignaturePad(canvas, { penColor: '#000', backgroundColor: 'rgba(0,0,0,0)', minWidth: 1, maxWidth: 2.8 });
 
+    const hint = modal.querySelector<HTMLElement>('.pad-hint')!;
+    pad.addEventListener('beginStroke', () => (hint.hidden = true));
     const close = (value: Sig | null) => {
       pad.off();
       modal.remove();
@@ -37,7 +39,7 @@ export function drawSignature(onForget?: () => void): Promise<Sig | null> {
     addEventListener('keydown', onKey, true);
     modal.addEventListener('click', (e) => {
       const a = (e.target as HTMLElement).dataset.a;
-      if (a === 'clear') pad.clear();
+      if (a === 'clear') pad.clear(), (hint.hidden = false);
       if (a === 'forget') onForget!();
       if (a === 'cancel' || a === 'forget' || (a === 'done' && pad.isEmpty())) close(null);
       else if (a === 'done') close(trim(canvas, Math.ceil(4 * dpr)));

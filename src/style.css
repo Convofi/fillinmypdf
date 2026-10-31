@@ -1,42 +1,118 @@
+/* Tokens: chrome only. PDF pages stay white in both schemes. */
+:root {
+  --bg: #f6f5f2;
+  --chrome: #ffffff;
+  --glass: rgba(255, 255, 255, 0.82);
+  --text: #111111;
+  --muted: #6b6b6b;
+  --line: rgba(0, 0, 0, 0.08);
+  --line-strong: rgba(0, 0, 0, 0.14);
+  --hover: rgba(0, 0, 0, 0.04);
+  --accent: #2563eb;
+  --accent-rgb: 37, 99, 235;
+  --primary-bg: #111111;
+  --primary-fg: #ffffff;
+  --danger: #c2410c;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.08);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141414;
+    --chrome: #1c1c1c;
+    --glass: rgba(28, 28, 28, 0.82);
+    --text: #ededed;
+    --muted: #9a9a9a;
+    --line: rgba(255, 255, 255, 0.1);
+    --line-strong: rgba(255, 255, 255, 0.16);
+    --hover: rgba(255, 255, 255, 0.06);
+    --accent: #3b82f6;
+    --accent-rgb: 59, 130, 246;
+    --primary-bg: #ededed;
+    --primary-fg: #111111;
+    --danger: #f87171;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.4);
+    color-scheme: dark;
+  }
+}
+
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html, body { margin: 0; }
+html, body { margin: 0; background: var(--bg); }
 body {
-  font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  color: #111;
-  background: #ebebeb;
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, Helvetica, Arial, sans-serif;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
 }
+
+/* Buttons: ghost by default, one solid primary. */
 button {
   font: inherit;
   height: 32px;
   padding: 0 12px;
-  border: 1px solid #d0d0d0;
-  border-radius: 6px;
-  background: #fff;
-  color: #111;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
   cursor: pointer;
   white-space: nowrap;
+  transition: background-color 120ms, border-color 120ms, color 120ms, opacity 120ms;
 }
-button:hover { background: #f5f5f5; }
-button.primary { background: #111; border-color: #111; color: #fff; }
-button.primary:hover { background: #333; }
-button:disabled { opacity: 0.6; cursor: default; }
+button:hover { background: var(--hover); }
+button.primary { background: var(--primary-bg); border-color: var(--primary-bg); color: var(--primary-fg); font-weight: 500; }
+button.primary:hover { background: var(--primary-bg); opacity: 0.86; }
+button.quiet { border-color: transparent; color: var(--muted); padding: 0 8px; }
+button.quiet:hover { color: var(--text); }
+button:disabled { opacity: 0.55; cursor: default; }
+button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+a { color: var(--accent); }
+.wordmark { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
+button.wordmark { border: 0; padding: 0 4px; }
+button.wordmark:hover { background: none; opacity: 0.75; }
+.muted { color: var(--muted); }
 
-/* Empty state */
-.empty { position: fixed; inset: 0; display: flex; padding: 16px; background: #fafafa; cursor: pointer; }
-.drop {
-  flex: 1;
+/* Empty state: drop zone fills the first screen; landing copy sits below the fold. */
+.hero {
+  min-height: 100vh;
+  min-height: 100svh;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  border: 1px dashed #c4c4c4;
-  border-radius: 6px;
+  gap: 20px;
+  padding: 24px 16px;
 }
-.dragging .drop, .empty:hover .drop { border-color: #2563eb; background: #f3f7ff; }
-.big { font-size: 22px; font-weight: 600; }
-.small { color: #777; margin-top: 4px; }
+.drop {
+  width: 100%;
+  max-width: 560px;
+  height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 2px dashed var(--line-strong);
+  border-radius: 16px;
+  background: var(--chrome);
+}
+.drop svg { width: 40px; height: 40px; margin-bottom: 10px; color: var(--muted); transition: color 120ms; }
+.drop:hover, .dragging .drop { border-color: var(--accent); background: rgba(var(--accent-rgb), 0.04); }
+.drop:hover svg, .dragging .drop svg { color: var(--accent); }
+.drop-title { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+.tagline { margin: 0; color: var(--muted); text-align: center; }
+
+.landing { max-width: 640px; margin: 0 auto; padding: 24px 20px 56px; }
+.landing h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 8px; }
+.landing h2 { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 40px 0 12px; }
+.landing p, .landing li, .landing dd { color: var(--text); }
+.landing ol, .landing ul { margin: 0; padding-left: 20px; }
+.landing li { margin: 6px 0; }
+.landing dl { margin: 0; }
+.landing dt { margin-top: 18px; }
+.landing dd { margin: 4px 0 0; }
+.landing dd p { margin: 0; color: var(--muted); }
+.landing footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 
 /* Top bar */
 .bar {
@@ -50,18 +126,19 @@ button:disabled { opacity: 0.6; cursor: default; }
   gap: 12px;
   height: 52px;
   padding: 0 12px;
-  background: #fff;
-  border-bottom: 1px solid #ddd;
+  background: var(--glass);
+  -webkit-backdrop-filter: saturate(180%) blur(12px);
+  backdrop-filter: saturate(180%) blur(12px);
+  border-bottom: 1px solid var(--line);
 }
-.left, .right { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
-.right { justify-content: flex-end; }
-#name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #555; }
-.note { color: #888; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sheet input { width: 100%; height: 34px; padding: 0 8px; font: inherit; border: 1px solid #d0d0d0; border-radius: 6px; }
-#hint { flex: 0 1 auto; color: #555; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#hint a { color: #2563eb; }
-.placing #hint { color: #2563eb; font-weight: 500; }
+.left, .right { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.right { justify-content: flex-end; gap: 8px; }
+#name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); margin-left: 4px; }
+.note { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.85; }
+#hint { flex: 0 1 auto; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.placing #hint { color: var(--accent); font-weight: 500; }
 
+/* Pages */
 #pages {
   display: flex;
   flex-direction: column;
@@ -70,16 +147,29 @@ button:disabled { opacity: 0.6; cursor: default; }
   padding: 76px 24px 48px;
   overflow-x: clip;
 }
-.page { position: relative; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.06); }
-.page canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.page {
+  position: relative;
+  background: #fff;
+  border-radius: 2px;
+  /* hairline as a shadow ring so the page box (and the canvas inside it) keeps its exact size */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.08);
+}
+.page canvas { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 2px; }
 /* Clip overlays at the page edge exactly like the exported PDF does. */
 .layer { position: absolute; inset: 0; overflow: clip; }
-.field { position: absolute; background: rgba(0, 110, 255, 0.08); cursor: text; }
-.field:hover { background: rgba(0, 110, 255, 0.16); }
+.field {
+  position: absolute;
+  background: rgba(var(--accent-rgb), 0.07);
+  border: 1px solid rgba(var(--accent-rgb), 0.2);
+  border-radius: 2px;
+  cursor: text;
+  transition: background-color 120ms;
+}
+.field:hover { background: rgba(var(--accent-rgb), 0.14); }
 .field.check { cursor: pointer; }
-.placing .page { cursor: crosshair; }
+.placing .page, .placing .field { cursor: crosshair; }
 
-/* Placed elements */
+/* Placed elements (overlay text keeps the PDF fonts) */
 .el {
   position: absolute;
   touch-action: none;
@@ -93,32 +183,40 @@ button:disabled { opacity: 0.6; cursor: default; }
 .el.text { white-space: pre; min-width: 20px; min-height: 1.2em; outline-offset: 1px; }
 .el.text.wrap { white-space: pre-wrap; }
 .el.comb { white-space: pre; box-sizing: border-box; font-family: Courier, "Courier New", monospace; }
-.el.text:hover, .el.comb:hover { outline: 1px dashed #9ab; }
-.el[contenteditable="plaintext-only"] {
-  cursor: text;
-  user-select: text;
-  -webkit-user-select: text;
-}
+.el.text:hover, .el.comb:hover { outline: 1px dashed rgba(var(--accent-rgb), 0.5); }
+.el[contenteditable="plaintext-only"] { cursor: text; user-select: text; -webkit-user-select: text; }
 .el.check { white-space: nowrap; }
 /* Bigger touch target for small elements, without changing their layout. */
 .el.text::before, .el.check::before { content: ""; position: absolute; inset: -8px; }
 .el.check.form::before { content: none; } /* the form box itself is the target */
-.el.sel, .el.sel:hover { outline: 1px solid #2563eb; outline-offset: 1px; }
+.el.sel, .el.sel:hover { outline: 1.5px solid var(--accent); outline-offset: 1px; }
 
+/* Floating element toolbar: one pill */
 .toolbar {
   position: absolute;
   z-index: 5;
   display: flex;
-  gap: 2px;
   padding: 2px;
-  background: #fff;
-  border: 1px solid #d0d0d0;
+  background: var(--chrome);
+  border: 1px solid var(--line);
   border-radius: 6px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow);
 }
-.toolbar button { height: 26px; min-width: 28px; padding: 0 6px; border: 0; font-size: 14px; }
+.toolbar button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text);
+}
+.toolbar button + button { border-left: 1px solid var(--line); border-radius: 0 4px 4px 0; }
+.toolbar svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.toolbar [data-a="del"]:hover { color: var(--danger); }
 
-/* Signature modal */
+/* Modals (signature, password) */
 .modal {
   position: fixed;
   inset: 0;
@@ -128,29 +226,62 @@ button:disabled { opacity: 0.6; cursor: default; }
   justify-content: center;
   padding: 16px;
   background: rgba(0, 0, 0, 0.35);
+  animation: fade-in 160ms ease-out;
 }
-.sheet { width: 560px; max-width: 100%; padding: 16px; background: #fff; border-radius: 6px; }
-.sheet-title { font-weight: 600; margin-bottom: 10px; }
+.sheet {
+  width: 560px;
+  max-width: 100%;
+  padding: 20px;
+  background: var(--chrome);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  animation: pop-in 160ms ease-out;
+}
+.sheet-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 14px; }
+.pad { position: relative; }
 .sheet canvas {
   display: block;
   width: 100%;
   height: 200px;
-  background: #fff;
-  border: 1px solid #d0d0d0;
-  border-radius: 6px;
+  background: #fff; /* the signing surface is paper in both schemes */
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
   touch-action: none;
   cursor: crosshair;
 }
-.sheet-row { display: flex; gap: 8px; margin-top: 12px; }
+.pad-line { position: absolute; left: 24px; right: 24px; bottom: 52px; border-top: 1px solid rgba(0, 0, 0, 0.12); pointer-events: none; }
+.pad-hint { position: absolute; left: 0; right: 0; bottom: 26px; text-align: center; font-size: 12px; color: #9a9a9a; pointer-events: none; }
+.sheet input {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+}
+.sheet-row { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
 .sheet-row span { flex: 1; }
-.sheet-row .link { border: 0; background: none; padding: 0 4px; color: #777; font-size: 12px; text-decoration: underline; }
+.sheet-row .link { height: auto; border: 0; padding: 2px 4px; color: var(--muted); font-size: 12px; text-decoration: underline; text-underline-offset: 2px; }
+.sheet-row .link:hover { background: none; color: var(--text); }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes pop-in { from { opacity: 0; transform: scale(0.97); } }
 
-/* Phone: hint moves to a second row */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+
+/* Phone: the wordmark doubles as Open; hint moves to a second row */
 @media (max-width: 640px) {
   .bar { flex-wrap: wrap; height: auto; padding: 8px 12px; row-gap: 6px; }
-  .left { flex: 1 1 0; }
+  .left { flex: 1 1 0; flex-wrap: wrap; row-gap: 0; }
+  #open, #name { display: none; }
   .right { flex: 0 0 auto; gap: 6px; }
-  .right button { padding: 0 8px; }
+  .right button { padding: 0 10px; }
   #hint { order: 3; flex-basis: 100%; font-size: 13px; text-align: center; }
+  .note { flex-basis: 100%; font-size: 11px; }
   #pages { padding-top: 100px; }
+  .drop { height: 200px; }
 }
