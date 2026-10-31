@@ -5,7 +5,7 @@ import {
 } from '@cantoo/pdf-lib';
 import * as pdfjs from 'pdfjs-dist';
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from 'pdfjs-dist';
-import { xrefConsistentBytes } from './xref';
+import { loadAsPdfJsSees } from './xref';
 
 // One set of pdf.js options for the editor and for the export check, so both see the file the same way.
 export const pdfOptions = {
@@ -46,17 +46,15 @@ export async function exportPdf(
   onStage: (stage: 'checking' | 'saving') => void = () => {},
   report?: (page: number, differing: number, maxTile: number) => void, // per-page check result (tests)
 ): Promise<Uint8Array> {
-  // pdf-lib must see exactly the objects pdf.js resolved through the xref (see xref.ts); anything else is refused.
-  let consistent: ReturnType<typeof xrefConsistentBytes>;
+  // pdf-lib must hold exactly the objects pdf.js resolved through the xref (see xref.ts); anything else is refused.
+  // Decrypts owner- and user-password PDFs; the output is saved unencrypted.
+  let doc: PDFDocument;
   try {
-    consistent = xrefConsistentBytes(originalBytes);
+    doc = (await loadAsPdfJsSees(originalBytes, password)).doc;
   } catch (err) {
     throw new UnsafeExport(String(err));
   }
-  // Decrypts owner- and user-password PDFs; the output is saved unencrypted.
-  const doc = await PDFDocument.load(consistent.bytes, { password, preserveXFA: true });
-  if (String(doc.context.trailerInfo.Root) !== consistent.root || doc.getPageCount() !== original.numPages)
-    throw new UnsafeExport('pdf-lib and pdf.js disagree on the document structure');
+  if (doc.getPageCount() !== original.numPages) throw new UnsafeExport('pdf-lib and pdf.js disagree on the page count');
   // Flattened widget appearances are wrapped in this (unguessable) marked-content tag so the text check can tell them apart.
   const widgetTag = `FIMPW${crypto.getRandomValues(new Uint32Array(2)).join('')}`;
   // Bake form fields into the page so our text isn't hidden under widgets and fields aren't left live.
@@ -323,6 +321,7 @@ async function guard(original: PDFDocumentProxy, candidate: Uint8Array, widgetTa
   try {
     const copy = await task.promise;
     if (copy.numPages !== original.numPages) throw new Error('page count');
+    if (!sameOutline(await original.getOutline(), await copy.getOutline())) throw new Error('outline differs');
     const zoom = original.numPages > 50 ? 1.5 : 2.5; // device pixels per PDF point
     for (let i = 1; i <= original.numPages; i++) {
       const [a, b] = await Promise.all([original.getPage(i), copy.getPage(i)]);
@@ -330,7 +329,7 @@ async function guard(original: PDFDocumentProxy, candidate: Uint8Array, widgetTa
       if (Math.abs(va.width - vb.width) > 0.5 || Math.abs(va.height - vb.height) > 0.5) throw new Error('page size');
       // Same canvas budget as the editor: ≤ 16M pixels and ≤ 16384 px per side.
       const scale = Math.min(zoom, Math.sqrt(16e6 / (va.width * va.height)), 16384 / Math.max(va.width, va.height));
-      await sameTextAndAnnotations(a, b, widgetTag, i);
+      await sameTextAndAnnotations(a, b, original, copy, widgetTag, i);
       await rasterize(a, scale, canvases[0]);
       await rasterize(b, scale, canvases[1]);
       // Compare in strips so a 2.5× page never needs two full-page pixel copies at once.
@@ -370,7 +369,7 @@ async function guard(original: PDFDocumentProxy, candidate: Uint8Array, widgetTa
 // What a renderer would show isn't all a PDF says: compare the text pdf.js extracts (invisible OCR layers, white text)
 // and the annotations it reports (link targets, attachments). Flattened widgets add their own text, inside our tag;
 // annotations may only disappear (we strip some), never appear or change.
-async function sameTextAndAnnotations(a: PDFPageProxy, b: PDFPageProxy, widgetTag: string, i: number) {
+async function sameTextAndAnnotations(a: PDFPageProxy, b: PDFPageProxy, da: PDFDocumentProxy, db: PDFDocumentProxy, widgetTag: string, i: number) {
   const key = (t: { str: string; transform: number[] }) => `${t.str}@${t.transform.map((n) => n.toFixed(2)).join(',')}`;
   const ta = (await a.getTextContent()).items.map((t) => key(t as { str: string; transform: number[] }));
   const tb: string[] = [];
@@ -381,10 +380,37 @@ async function sameTextAndAnnotations(a: PDFPageProxy, b: PDFPageProxy, widgetTa
     else if (!stack.includes(widgetTag)) tb.push(key(t as { str: string; transform: number[] }));
   }
   if (ta.length !== tb.length || ta.some((k, j) => k !== tb[j])) throw new Error(`page ${i}: text differs`);
-  const sig = (x: Record<string, any>) =>
-    JSON.stringify([x.subtype, x.rect?.map((n: number) => n.toFixed(2)), x.url ?? null, x.unsafeUrl ?? null, x.dest ?? null, x.file?.filename ?? null, x.file?.content?.length ?? null]);
-  const before = new Set((await a.getAnnotations()).filter((x) => x.subtype !== 'Widget').map(sig));
-  for (const x of await b.getAnnotations()) if (x.subtype !== 'Widget' && !before.has(sig(x))) throw new Error(`page ${i}: annotation differs`);
+  // File attachments: pdf.js 6 returns the bytes separately, by fileId.
+  const content = async (d: PDFDocumentProxy, x: Record<string, any>) => {
+    if (!x.fileId) return null;
+    const c = (await d.getAttachmentContent(x.fileId)) as unknown as { content?: Uint8Array } | Uint8Array | null;
+    const bytes = c instanceof Uint8Array ? c : c?.content;
+    return bytes ? hash(bytes) : 'unreadable';
+  };
+  const sig = async (d: PDFDocumentProxy, x: Record<string, any>) =>
+    JSON.stringify([x.subtype, x.rect?.map((n: number) => n.toFixed(2)), x.url ?? null, x.unsafeUrl ?? null, x.dest ?? null, x.file?.filename ?? null, await content(d, x)]);
+  const before = new Set<string>();
+  for (const x of await a.getAnnotations()) if (x.subtype !== 'Widget') before.add(await sig(da, x));
+  for (const x of await b.getAnnotations()) if (x.subtype !== 'Widget' && !before.has(await sig(db, x))) throw new Error(`page ${i}: annotation differs`);
+}
+
+// FNV-1a over the bytes, enough to tell two attachments apart.
+const hash = (b: Uint8Array) => {
+  let h = 0x811c9dc5;
+  for (const v of b) h = Math.imul(h ^ v, 0x01000193) >>> 0;
+  return `${b.length}:${h}`;
+};
+
+// Bookmarks: same titles and nesting; a target may be gone (we strip non-navigation actions) but never different.
+type OutlineItem = { title: string; dest?: unknown; url?: string | null; unsafeUrl?: string; action?: string | null; items: OutlineItem[] };
+function sameOutline(a: OutlineItem[] | null, b: OutlineItem[] | null): boolean {
+  if (!a?.length || !b?.length) return !a?.length && !b?.length;
+  return a.length === b.length && a.every((x, i) => {
+    const y = b[i];
+    const target = (o: OutlineItem) => [o.dest, o.url, o.unsafeUrl, o.action].map((v) => JSON.stringify(v ?? null));
+    const [tx, ty] = [target(x), target(y)];
+    return x.title === y.title && ty.every((v, k) => v === 'null' || v === tx[k]) && sameOutline(x.items, y.items);
+  });
 }
 
 async function rasterize(page: PDFPageProxy, scale: number, canvas: HTMLCanvasElement) {
