@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sign a PDF</title>
+  </head>
+  <body>
+    <div id="empty" class="empty">
+      <div class="drop">
+        <div class="big">Drop a PDF here</div>
+        <div class="small">or click to open</div>
+      </div>
+    </div>
+    <div id="editor" hidden>
+      <header class="bar">
+        <div class="left"><button id="open">Open</button><span id="name"></span></div>
+        <div id="hint"></div>
+        <div class="right">
+          <button id="check">✓ Check</button>
+          <button id="sign">Sign</button>
+          <button id="download" class="primary">Download</button>
+        </div>
+      </header>
+      <main id="pages"></main>
+    </div>
+    <input type="file" id="file" accept="application/pdf" hidden />
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

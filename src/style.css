@@ -1,0 +1,152 @@
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body {
+  font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: #111;
+  background: #ebebeb;
+  -webkit-tap-highlight-color: transparent;
+}
+button {
+  font: inherit;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  background: #fff;
+  color: #111;
+  cursor: pointer;
+  white-space: nowrap;
+}
+button:hover { background: #f5f5f5; }
+button.primary { background: #111; border-color: #111; color: #fff; }
+button.primary:hover { background: #333; }
+button:disabled { opacity: 0.6; cursor: default; }
+
+/* Empty state */
+.empty { position: fixed; inset: 0; display: flex; padding: 16px; background: #fafafa; cursor: pointer; }
+.drop {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed #c4c4c4;
+  border-radius: 6px;
+}
+.dragging .drop, .empty:hover .drop { border-color: #2563eb; background: #f3f7ff; }
+.big { font-size: 22px; font-weight: 600; }
+.small { color: #777; margin-top: 4px; }
+
+/* Top bar */
+.bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 52px;
+  padding: 0 12px;
+  background: #fff;
+  border-bottom: 1px solid #ddd;
+}
+.left, .right { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.right { justify-content: flex-end; }
+#name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #555; }
+#hint { flex: 0 1 auto; color: #555; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#hint a { color: #2563eb; }
+.placing #hint { color: #2563eb; font-weight: 500; }
+
+#pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  padding: 76px 24px 48px;
+  overflow-x: clip;
+}
+.page { position: relative; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.06); }
+.page canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+/* Clip overlays at the page edge exactly like the exported PDF does. */
+.layer { position: absolute; inset: 0; overflow: clip; }
+.field { position: absolute; background: rgba(0, 110, 255, 0.08); cursor: text; }
+.field:hover { background: rgba(0, 110, 255, 0.16); }
+.field.check { cursor: pointer; }
+.placing .page { cursor: crosshair; }
+
+/* Placed elements */
+.el {
+  position: absolute;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: move;
+  font-family: Helvetica, Arial, "Liberation Sans", sans-serif;
+  line-height: 1.2;
+  color: #000;
+}
+.el.text { white-space: pre; min-width: 20px; min-height: 1.2em; outline-offset: 1px; }
+.el.text.wrap { white-space: pre-wrap; }
+.el.comb { white-space: pre; box-sizing: border-box; font-family: Courier, "Courier New", monospace; overflow: hidden; }
+.el.text:hover, .el.comb:hover { outline: 1px dashed #9ab; }
+.el[contenteditable="plaintext-only"] {
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.el.check { white-space: nowrap; }
+/* Bigger touch target for small elements, without changing their layout. */
+.el.text::before, .el.check::before { content: ""; position: absolute; inset: -8px; }
+.el.sel, .el.sel:hover { outline: 1px solid #2563eb; outline-offset: 1px; }
+
+.toolbar {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: #fff;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+.toolbar button { height: 26px; min-width: 28px; padding: 0 6px; border: 0; font-size: 14px; }
+
+/* Signature modal */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.35);
+}
+.sheet { width: 560px; max-width: 100%; padding: 16px; background: #fff; border-radius: 6px; }
+.sheet-title { font-weight: 600; margin-bottom: 10px; }
+.sheet canvas {
+  display: block;
+  width: 100%;
+  height: 200px;
+  background: #fff;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  touch-action: none;
+  cursor: crosshair;
+}
+.sheet-row { display: flex; gap: 8px; margin-top: 12px; }
+.sheet-row span { flex: 1; }
+
+/* Phone: hint moves to a second row */
+@media (max-width: 640px) {
+  .bar { flex-wrap: wrap; height: auto; padding: 8px 12px; row-gap: 6px; }
+  .left { flex: 1 1 0; }
+  .right { flex: 0 0 auto; gap: 6px; }
+  .right button { padding: 0 8px; }
+  #hint { order: 3; flex-basis: 100%; font-size: 13px; text-align: center; }
+  #pages { padding-top: 100px; }
+}
