@@ -100,6 +100,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 .el.check { white-space: nowrap; }
 /* Bigger touch target for small elements, without changing their layout. */
 .el.text::before, .el.check::before { content: ""; position: absolute; inset: -8px; }
+.el.check.form::before { content: none; } /* the form box itself is the target */
 .el.sel, .el.sel:hover { outline: 1px solid #2563eb; outline-offset: 1px; }
 
 .toolbar {

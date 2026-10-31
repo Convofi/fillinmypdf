@@ -7,8 +7,8 @@ import { drawSignature, type Sig } from './signature';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
-// A form widget in display points. sigOnly: a read-only text field, used only to snap signatures.
-type Field = { kind: 'text' | 'comb' | 'check'; x: number; y: number; w: number; h: number; maxLen: number; multiline: boolean; sigOnly: boolean };
+// An empty form widget in display points: a click / Tab / signature target.
+type Field = { kind: 'text' | 'comb' | 'check'; x: number; y: number; w: number; h: number; maxLen: number; multiline: boolean };
 
 type Page = {
   viewport1: PageViewport;
@@ -61,8 +61,6 @@ const editing = () => (document.activeElement as HTMLElement | null)?.isContentE
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 const typed = (e: El) => e.type === 'text' || e.type === 'comb';
 const inside = (f: Field, x: number, y: number) => x >= f.x && x <= f.x + f.w && y >= f.y && y <= f.y + f.h;
-// ZapfDingbats ✓ is 0.755em wide; its visual center sits ~0.555em below the line-box top.
-const checkCenter = (e: El) => [e.x + 0.378 * e.fontSize!, e.y + 0.555 * e.fontSize!];
 
 // ---------- Loading ----------
 
@@ -77,14 +75,19 @@ async function readPage(page: PDFPageProxy) {
   const fields: Field[] = [];
   for (const a of await page.getAnnotations()) {
     if (a.subtype !== 'Widget' || !['Tx', 'Ch', 'Btn'].includes(a.fieldType) || a.hidden || a.noView || a.pushButton) continue;
+    // Read-only is ignored (XFA logic sets it on ordinary blanks), except read-only multiline = barcode.
+    if (a.readOnly && a.multiLine) continue;
+    // Values baked into the PDF are not ours to edit: pre-filled widgets are not targets.
+    const v = a.fieldValue;
+    if (a.fieldType === 'Btn' ? v === a.exportValue || (v && v !== 'Off') : String(v ?? '').trim()) continue;
     const [x1, y1] = viewport1.convertToViewportPoint(a.rect[0], a.rect[1]);
     const [x2, y2] = viewport1.convertToViewportPoint(a.rect[2], a.rect[3]);
     const f: Field = {
       kind: a.fieldType === 'Btn' ? 'check' : a.comb && a.maxLen > 0 ? 'comb' : 'text',
       x: Math.min(x1, x2), y: Math.min(y1, y2), w: Math.abs(x2 - x1), h: Math.abs(y2 - y1),
-      maxLen: a.maxLen || 0, multiline: !!a.multiLine, sigOnly: !!a.readOnly,
+      maxLen: a.maxLen || 0, multiline: !!a.multiLine,
     };
-    if (f.w > 0 && f.h > 0 && (!f.sigOnly || (f.kind === 'text' && !f.multiline))) fields.push(f);
+    if (f.w > 0 && f.h > 0) fields.push(f);
   }
   fields.sort((a, b) => Math.round(a.y / 4) - Math.round(b.y / 4) || a.x - b.x);
   return { viewport1, fields };
@@ -140,7 +143,6 @@ async function load(file: File) {
     const layer = document.createElement('div');
     layer.className = 'layer';
     for (const f of fields) {
-      if (f.sigOnly) continue;
       const d = document.createElement('div');
       d.className = `field ${f.kind === 'check' ? 'check' : 'text'}`;
       layer.append(d);
@@ -149,7 +151,7 @@ async function load(file: File) {
     pagesEl.append(el);
     return { viewport1, fields, el, layer, canvas, scale: 1, job: 0, done: false, task: null };
   });
-  hasFields = pages.some((p) => p.fields.some((f) => !f.sigOnly));
+  hasFields = pages.some((p) => p.fields.length > 0);
   setMode('none');
   nameEl.textContent = file.name;
   emptyEl.hidden = true;
@@ -185,7 +187,7 @@ function layout() {
     p.el.style.width = `${w}px`;
     p.el.style.height = `${p.viewport1.height * s}px`;
     const boxes = p.layer.querySelectorAll<HTMLElement>('.field');
-    p.fields.filter((f) => !f.sigOnly).forEach((f, i) => {
+    p.fields.forEach((f, i) => {
       Object.assign(boxes[i].style, { left: `${f.x * s}px`, top: `${f.y * s}px`, width: `${f.w * s}px`, height: `${f.h * s}px` });
     });
     observer.unobserve(p.el);
@@ -249,7 +251,7 @@ function add(e: El) {
     n = document.createElement('div');
     n.textContent = e.type === 'check' ? '✓' : (e.text ?? '');
   }
-  n.className = `el ${e.type}${e.type === 'text' && e.w ? ' wrap' : ''}`;
+  n.className = `el ${e.type}${e.type === 'text' && e.w ? ' wrap' : ''}${e.type === 'check' && e.field !== undefined ? ' form' : ''}`;
   nodes.set(e.id, n);
   pages[e.pageIndex].layer.append(n);
   position(e);
@@ -257,9 +259,13 @@ function add(e: El) {
   if (!typed(e)) return;
 
   n.addEventListener('input', () => {
-    let t = n.innerText.replace(/\n$/, '');
-    if (e.maxLen && t.length > e.maxLen) {
-      n.textContent = t = t.slice(0, e.maxLen);
+    const raw = n.innerText.replace(/\n$/, '');
+    let t = raw;
+    if (e.type === 'comb') t = t.replace(/\n/g, '');
+    else if (e.field !== undefined && !e.w) t = t.replace(/\n/g, ' '); // single-line field
+    if (e.maxLen) t = t.slice(0, e.maxLen);
+    if (t !== raw) {
+      n.textContent = t;
       caretToEnd(n);
     }
     e.text = t;
@@ -270,9 +276,10 @@ function add(e: El) {
       ev.preventDefault();
       remove(e.id);
     } else if (ev.key === 'Enter' && e.field !== undefined && !e.w) ev.preventDefault(); // single-line field
-    else if (ev.key === 'Tab' && e.field !== undefined) {
+    else if (ev.key === 'Tab') {
       ev.preventDefault();
-      tabFrom(e.pageIndex, e.field, ev.shiftKey ? -1 : 1);
+      if (e.field !== undefined) tabFrom(e.pageIndex, e.field, ev.shiftKey ? -1 : 1);
+      else n.blur(), select(null); // free box: commit and leave
     }
   });
   n.addEventListener('blur', () => {
@@ -344,10 +351,15 @@ function onElementDown(ev: PointerEvent, e: El, n: HTMLElement) {
     n.removeEventListener('pointermove', move);
     n.removeEventListener('pointerup', up);
     n.removeEventListener('pointercancel', up);
-    const [cx, cy] = e.type === 'check' ? checkCenter(e) : [0, 0];
-    const box = p.fields.find((f) => f.kind === 'check' && inside(f, cx, cy));
+    // Dragged out of its field (center outside): becomes a free element; the field is clickable again.
+    const f = e.field === undefined ? null : p.fields[e.field];
+    if (moved && f && !inside(f, e.x + n.offsetWidth / 2 / p.scale, e.y + n.offsetHeight / 2 / p.scale)) {
+      delete e.field;
+      if (e.type === 'text') delete e.maxLen;
+      n.classList.remove('form');
+    }
     if (typed(e)) edit(e, n);
-    else if (!moved && box) remove(e.id); // tapping a checked form box unchecks it
+    else if (!moved && e.field !== undefined) remove(e.id); // tapping a form check mark unchecks it
     else select(e.id);
   };
   n.addEventListener('pointermove', move);
@@ -380,18 +392,16 @@ toolbar.addEventListener('click', (ev) => {
 
 // ---------- Form fields ----------
 
-function addCheck(pageIndex: number, cx: number, cy: number, fontSize: number) {
-  add({ id: String(nextId++), type: 'check', pageIndex, x: cx - 0.378 * fontSize, y: cy - 0.555 * fontSize, fontSize });
+// ZapfDingbats ✓ is 0.755em wide; its visual center sits ~0.555em below the line-box top.
+function addCheck(pageIndex: number, cx: number, cy: number, fontSize: number, field?: number) {
+  add({ id: String(nextId++), type: 'check', pageIndex, x: cx - 0.378 * fontSize, y: cy - 0.555 * fontSize, fontSize, field });
 }
 
 // Click (or Tab) into a field: reuse its element, toggle a checkbox, or create a snapped element.
 function fill(pageIndex: number, field: number) {
   const f = pages[pageIndex].fields[field];
-  if (f.kind === 'check') {
-    const on = els.find((e) => e.type === 'check' && e.pageIndex === pageIndex && inside(f, ...(checkCenter(e) as [number, number])));
-    return on ? remove(on.id) : addCheck(pageIndex, f.x + f.w / 2, f.y + f.h / 2, clamp(f.h * 0.9, 8, 18));
-  }
   const existing = els.find((e) => e.pageIndex === pageIndex && e.field === field);
+  if (f.kind === 'check') return existing ? remove(existing.id) : addCheck(pageIndex, f.x + f.w / 2, f.y + f.h / 2, clamp(f.h * 0.9, 8, 18), field);
   if (existing) return edit(existing, nodes.get(existing.id)!);
   const base = { id: String(nextId++), pageIndex, field, text: '', maxLen: f.maxLen || undefined };
   const fs = clamp(Math.round(f.h * 0.62), 7, 12);
@@ -401,7 +411,7 @@ function fill(pageIndex: number, field: number) {
 }
 
 function tabFrom(pageIndex: number, field: number, dir: 1 | -1) {
-  const order = pages.flatMap((p, pi) => p.fields.flatMap((f, i) => (f.kind === 'check' || f.sigOnly ? [] : [[pi, i]])));
+  const order = pages.flatMap((p, pi) => p.fields.flatMap((f, i) => (f.kind === 'check' ? [] : [[pi, i]])));
   const at = order.findIndex(([pi, i]) => pi === pageIndex && i === field);
   const [pi, i] = order[(at + dir + order.length) % order.length];
   fill(pi, i);
@@ -463,13 +473,15 @@ pagesEl.addEventListener('click', (ev) => {
   const r = pageEl.getBoundingClientRect();
   const x = (ev.clientX - r.left) / p.scale;
   const y = (ev.clientY - r.top) / p.scale;
+  const field = p.fields.findIndex((f) => inside(f, x, y));
   if (mode === 'check') {
-    addCheck(pageIndex, x, y, 14);
+    if (p.fields[field]?.kind === 'check') fill(pageIndex, field);
+    else addCheck(pageIndex, x, y, 14);
     return setMode('none');
   }
   if (mode === 'sig' && sig) {
     const ratio = sig.w / sig.h;
-    const f = p.fields.find((f) => f.kind !== 'check' && inside(f, x, y));
+    const f = p.fields[field]?.kind === 'check' ? undefined : p.fields[field];
     let w = Math.min(120, 0.3 * p.viewport1.width);
     let h = w / ratio;
     if (f) (h = 1.6 * f.h), (w = Math.min(h * ratio, f.w)), (h = w / ratio);
@@ -478,7 +490,6 @@ pagesEl.addEventListener('click', (ev) => {
     return setMode('none');
   }
   if (t.closest('.el')) return;
-  const field = p.fields.findIndex((f) => !f.sigOnly && inside(f, x, y));
   if (field >= 0) return fill(pageIndex, field);
   add({ id: String(nextId++), type: 'text', pageIndex, x, y: y - 7.2, fontSize: 12, text: '' });
 });
