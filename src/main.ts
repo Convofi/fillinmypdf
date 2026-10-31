@@ -4,6 +4,7 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, PageViewport, RenderTask } from 'pdfjs-dist';
 import { exportPdf, type El } from './export';
 import { drawSignature, type Sig } from './signature';
+import { askPassword } from './password';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -74,6 +75,7 @@ async function readPage(page: PDFPageProxy) {
   const viewport1 = page.getViewport({ scale: 1 });
   const fields: Field[] = [];
   for (const a of await page.getAnnotations()) {
+    if (fields.length >= 500) break; // a hostile file can carry thousands of widgets
     if (a.subtype !== 'Widget' || !['Tx', 'Ch', 'Btn'].includes(a.fieldType) || a.hidden || a.noView || a.pushButton) continue;
     // Read-only is ignored (XFA logic sets it on ordinary blanks), except read-only multiline = barcode.
     if (a.readOnly && a.multiLine) continue;
@@ -105,6 +107,7 @@ async function load(file: File) {
       data: data.slice(),
       password: pw,
       standardFontDataUrl: `${import.meta.env.BASE_URL}standard_fonts/`,
+      wasmUrl: `${import.meta.env.BASE_URL}wasm/`, // JPEG2000 / JBIG2 / ICC decoders
       verbosity: pdfjs.VerbosityLevel.ERRORS,
     });
     try {
@@ -115,7 +118,7 @@ async function load(file: File) {
       task.destroy();
       if (gen !== loadGen) return;
       if ((err as Error)?.name !== 'PasswordException') return alert("Couldn't open that file. Is it a valid PDF?");
-      const entered = prompt(pw ? 'Wrong password. Try again:' : 'This PDF needs a password');
+      const entered = await askPassword(!!pw);
       if (entered === null) return; // cancelled: keep the current document
       pw = entered;
     }
@@ -154,6 +157,7 @@ async function load(file: File) {
   hasFields = pages.some((p) => p.fields.length > 0);
   setMode('none');
   nameEl.textContent = file.name;
+  $('#pwnote').hidden = !pw;
   emptyEl.hidden = true;
   editorEl.hidden = false;
   window.scrollTo(0, 0);
@@ -209,9 +213,12 @@ async function render(p: Page, i: number) {
   const job = (p.job = ++jobSeq);
   const page = await pdf.getPage(i + 1).catch(() => null);
   if (!page || p.job !== job) return;
-  const viewport = page.getViewport({ scale: p.scale * (window.devicePixelRatio || 1) });
-  p.canvas.width = Math.floor(viewport.width);
-  p.canvas.height = Math.floor(viewport.height);
+  // Canvas budget (iOS Safari): ≤ 16M pixels and ≤ 16384 px per side; give up device-pixel crispness first.
+  const css = p.viewport1.width * p.scale * p.viewport1.height * p.scale;
+  const k = Math.min(window.devicePixelRatio || 1, Math.sqrt(16e6 / css), 16384 / (p.viewport1.width * p.scale), 16384 / (p.viewport1.height * p.scale));
+  const viewport = page.getViewport({ scale: p.scale * k });
+  p.canvas.width = Math.max(1, Math.floor(viewport.width));
+  p.canvas.height = Math.max(1, Math.floor(viewport.height));
   p.task = page.render({ canvas: p.canvas, viewport });
   try {
     await p.task.promise;
@@ -455,7 +462,8 @@ function savedSig(): Sig | null {
     const s = JSON.parse(localStorage.getItem(SIG_KEY) ?? 'null');
     const ok = (n: unknown) => typeof n === 'number' && Number.isFinite(n) && n > 0;
     // Only ever used as <img>.src / embedPng, but reject anything that isn't a PNG data URL.
-    if (typeof s?.dataUrl === 'string' && s.dataUrl.startsWith('data:image/png;base64,') && ok(s.w) && ok(s.h))
+    const png = (u: unknown) => typeof u === 'string' && u.startsWith('data:image/png;base64,') && atob(u.slice(22, 34)).startsWith('\x89PNG\r\n\x1a\n');
+    if (png(s?.dataUrl) && ok(s.w) && ok(s.h))
       return { dataUrl: s.dataUrl, w: s.w, h: s.h };
     localStorage.removeItem(SIG_KEY);
     return null;

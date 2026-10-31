@@ -1,4 +1,4 @@
-# Sign a PDF
+# Fill In My PDF
 
 Fill in and sign PDFs in the browser. Drop a PDF, click to type, place check marks and a drawn
 signature, then download a flattened copy. No accounts, no uploads, no server.
@@ -26,10 +26,11 @@ the original bytes, flattens any form, draws the overlays and saves a new file.
   stored is your drawn signature, in this browser's localStorage ("Forget saved signature" in the
   signature dialog removes it).
 - Strict Content-Security-Policy (header on Vercel, `<meta>` in the built `index.html`):
-  `script-src 'self'`, no inline scripts or styles, no `eval`, `connect-src 'self'`,
-  `object-src 'none'`, `frame-ancestors 'none'`.
+  `script-src 'self' 'wasm-unsafe-eval'` (WebAssembly image decoders only; no JS `eval`), no inline
+  scripts or styles, `connect-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`.
 - PDF JavaScript and XFA are never executed (pdf.js scripting and XFA rendering are off).
 - Password-protected PDFs are decrypted locally; the downloaded copy is unencrypted.
+- The download is flattened exactly as shown and stripped of auto-run/JavaScript/launch/submit actions.
 
 ## Known limitations
 
@@ -37,4 +38,3 @@ the original bytes, flattens any form, draws the overlays and saves a new file.
 - Text in a multiline field can overflow past the field's bottom edge (the editor shows the same).
 - Fonts are the PDF standard fonts (Helvetica, Courier); characters outside WinAnsi export as `?`.
 - On phones, use pinch-zoom to reach small fields; there is no in-app zoom.
-- JPEG2000/JBIG2 images (common in scanned PDFs) are not decoded yet (pdf.js `wasmUrl` is not set).
