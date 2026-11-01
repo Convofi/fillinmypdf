@@ -418,11 +418,15 @@ function sameOutline(a: OutlineItem[] | null, b: OutlineItem[] | null): boolean 
 }
 
 // Render page a (original) and b (candidate) at `scale` and count differing pixels: channel difference > 24, and the
-// most pixels with difference > 2 in any 16×16 tile.
+// most pixels with difference > 2 in any 16×16 tile. Edge antialiasing is forgiven: the original draws widgets on the
+// annotation path, the candidate as page content, and GPU canvas rasterizes their edges with slightly different
+// coverage (or a pixel off). A difference is an edge difference when both images have an edge there (3×3 contrast) and
+// each pixel lies within the other image's 3×3 range. Flat areas forgive nothing, so planted content is only ever
+// forgiven in a one-pixel band along an edge both images already have.
 async function compare(a: PDFPageProxy, b: PDFPageProxy, scale: number, canvases: HTMLCanvasElement[]) {
   await rasterize(a, scale, canvases[0]);
   await rasterize(b, scale, canvases[1]);
-  // Compare in strips so a 2.5× page never needs two full-page pixel copies at once.
+  // Compare in strips (with one row of context above and below) so a 2.5× page never needs two full-page pixel copies.
   const [ca, cb] = canvases.map((c) => c.getContext('2d')!);
   const { width, height } = canvases[0];
   const tilesX = Math.ceil(width / 16);
@@ -430,17 +434,39 @@ async function compare(a: PDFPageProxy, b: PDFPageProxy, scale: number, canvases
   let maxTile = 0;
   for (let y = 0; y < height; y += 256) {
     const h = Math.min(256, height - y);
-    const pa = ca.getImageData(0, y, width, h).data;
-    const pb = cb.getImageData(0, y, width, h).data;
+    const top = Math.max(0, y - 1);
+    const rows = Math.min(height, y + h + 1) - top;
+    const pa = ca.getImageData(0, top, width, rows).data;
+    const pb = cb.getImageData(0, top, width, rows).data;
+    // Per-channel range of q's 3×3 neighbourhood around (x, r), or undefined when it has no edge (luma contrast < 32).
+    const range = (q: Uint8ClampedArray, x: number, r: number) => {
+      const lo = [255, 255, 255], hi = [0, 0, 0];
+      let ylo = 255, yhi = 0;
+      for (let rr = Math.max(0, r - 1); rr <= Math.min(rows - 1, r + 1); rr++)
+        for (let xx = Math.max(0, x - 1); xx <= Math.min(width - 1, x + 1); xx++) {
+          const j = (rr * width + xx) * 4;
+          for (let c = 0; c < 3; c++) (lo[c] = Math.min(lo[c], q[j + c])), (hi[c] = Math.max(hi[c], q[j + c]));
+          const l = 0.299 * q[j] + 0.587 * q[j + 1] + 0.114 * q[j + 2];
+          (ylo = Math.min(ylo, l)), (yhi = Math.max(yhi, l));
+        }
+      return yhi - ylo >= 32 ? { lo, hi } : undefined;
+    };
+    const inside = (p: Uint8ClampedArray, k: number, g: { lo: number[]; hi: number[] }) =>
+      [0, 1, 2].every((c) => p[k + c] >= g.lo[c] - 16 && p[k + c] <= g.hi[c] + 16);
+    const edge = (x: number, r: number, k: number) => {
+      const ga = range(pa, x, r), gb = ga && range(pb, x, r);
+      return !!gb && inside(pa, k, gb) && inside(pb, k, ga!);
+    };
     const tiles = new Uint16Array(tilesX * 16);
-    for (let k = 0, px = 0; k < pa.length; k += 4, px++) {
-      const d = Math.max(Math.abs(pa[k] - pb[k]), Math.abs(pa[k + 1] - pb[k + 1]), Math.abs(pa[k + 2] - pb[k + 2]));
-      if (d > 24) differing++;
-      if (d > 2) {
-        const t = ((Math.floor(px / width) >> 4) * tilesX) + ((px % width) >> 4);
+    for (let r = y - top; r < y - top + h; r++)
+      for (let x = 0; x < width; x++) {
+        const k = (r * width + x) * 4;
+        const d = Math.max(Math.abs(pa[k] - pb[k]), Math.abs(pa[k + 1] - pb[k + 1]), Math.abs(pa[k + 2] - pb[k + 2]));
+        if (d <= 2 || edge(x, r, k)) continue;
+        if (d > 24) differing++;
+        const t = ((r - (y - top)) >> 4) * tilesX + (x >> 4);
         maxTile = Math.max(maxTile, ++tiles[t]);
       }
-    }
   }
   return { differing, maxTile };
 }
