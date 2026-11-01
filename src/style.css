@@ -321,3 +321,5 @@ button.wordmark:hover { background: none; opacity: 0.75; }
   .hero h1 { font-size: 30px; }
   .lede { font-size: 16px; }
 }
+
+.sheet-text.small { font-size: 12px; word-break: break-word; }

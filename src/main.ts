@@ -610,7 +610,7 @@ downloadBtn.addEventListener('click', async () => {
     track('download');
   } catch (err) {
     if (err instanceof UnsafeExport)
-      await notice("This PDF can't be saved safely.", 'The file contains content that would look different in the saved copy than it does here.');
+      await notice("This PDF can't be saved safely.", 'The file contains content that would look different in the saved copy than it does here.', err.message.replace(/^Error: /, '').slice(0, 200));
     else {
       console.error(err);
       alert("Sorry, the PDF couldn't be created.");

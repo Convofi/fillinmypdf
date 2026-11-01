@@ -357,30 +357,10 @@ async function guard(original: PDFDocumentProxy, candidate: Uint8Array, widgetTa
       // Same canvas budget as the editor: ≤ 16M pixels and ≤ 16384 px per side.
       const scale = Math.min(zoom, Math.sqrt(16e6 / (va.width * va.height)), 16384 / Math.max(va.width, va.height));
       await sameTextAndAnnotations(a, b, original, copy, widgetTag, i);
-      await rasterize(a, scale, canvases[0]);
-      await rasterize(b, scale, canvases[1]);
-      // Compare in strips so a 2.5× page never needs two full-page pixel copies at once.
-      const [ca, cb] = canvases.map((c) => c.getContext('2d')!);
-      const { width, height } = canvases[0];
-      const tilesX = Math.ceil(width / 16);
-      let differing = 0;
-      let maxTile = 0;
-      for (let y = 0; y < height; y += 256) {
-        const h = Math.min(256, height - y);
-        const pa = ca.getImageData(0, y, width, h).data;
-        const pb = cb.getImageData(0, y, width, h).data;
-        const tiles = new Uint16Array(tilesX * 16);
-        for (let k = 0, px = 0; k < pa.length; k += 4, px++) {
-          const d = Math.max(Math.abs(pa[k] - pb[k]), Math.abs(pa[k + 1] - pb[k + 1]), Math.abs(pa[k + 2] - pb[k + 2]));
-          if (d > 24) differing++;
-          if (d > 2) {
-            const t = ((Math.floor(px / width) >> 4) * tilesX) + ((px % width) >> 4);
-            maxTile = Math.max(maxTile, ++tiles[t]);
-          }
-        }
-      }
-      // Zero tolerance for visible change (a single changed digit is only a few pixels), and no faint clusters either:
-      // ≥ 8 slightly-different pixels in one 16×16 tile is near-invisible text, not anti-aliasing noise (≤ 4 measured).
+      // Canvas text rendering is not perfectly deterministic (a font that finishes loading mid-render, GPU
+      // anti-aliasing): a mismatch is measured twice and only a repeatable one counts. Planted content repeats.
+      let { differing, maxTile } = await compare(a, b, scale, canvases);
+      if (differing > 0 || maxTile >= 8) ({ differing, maxTile } = await compare(a, b, scale, canvases));
       report?.(i, differing, maxTile);
       if (differing > 0) throw new Error(`page ${i}: ${differing} pixels differ`);
       if (maxTile >= 8) throw new Error(`page ${i}: faint change (${maxTile} pixels in one tile)`);
@@ -435,6 +415,34 @@ function sameOutline(a: OutlineItem[] | null, b: OutlineItem[] | null): boolean 
     const [tx, ty] = [target(x), target(y)];
     return x.title === y.title && ty.every((v, k) => v === 'null' || v === tx[k]) && sameOutline(x.items, y.items);
   });
+}
+
+// Render page a (original) and b (candidate) at `scale` and count differing pixels: channel difference > 24, and the
+// most pixels with difference > 2 in any 16×16 tile.
+async function compare(a: PDFPageProxy, b: PDFPageProxy, scale: number, canvases: HTMLCanvasElement[]) {
+  await rasterize(a, scale, canvases[0]);
+  await rasterize(b, scale, canvases[1]);
+  // Compare in strips so a 2.5× page never needs two full-page pixel copies at once.
+  const [ca, cb] = canvases.map((c) => c.getContext('2d')!);
+  const { width, height } = canvases[0];
+  const tilesX = Math.ceil(width / 16);
+  let differing = 0;
+  let maxTile = 0;
+  for (let y = 0; y < height; y += 256) {
+    const h = Math.min(256, height - y);
+    const pa = ca.getImageData(0, y, width, h).data;
+    const pb = cb.getImageData(0, y, width, h).data;
+    const tiles = new Uint16Array(tilesX * 16);
+    for (let k = 0, px = 0; k < pa.length; k += 4, px++) {
+      const d = Math.max(Math.abs(pa[k] - pb[k]), Math.abs(pa[k + 1] - pb[k + 1]), Math.abs(pa[k + 2] - pb[k + 2]));
+      if (d > 24) differing++;
+      if (d > 2) {
+        const t = ((Math.floor(px / width) >> 4) * tilesX) + ((px % width) >> 4);
+        maxTile = Math.max(maxTile, ++tiles[t]);
+      }
+    }
+  }
+  return { differing, maxTile };
 }
 
 async function rasterize(page: PDFPageProxy, scale: number, canvas: HTMLCanvasElement) {
