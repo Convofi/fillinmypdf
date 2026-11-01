@@ -1,5 +1,5 @@
 import {
-  PDFArray, PDFDict, PDFDocument, PDFDropdown, PDFName, PDFOptionList, PDFRef, PDFStream, PDFTextField, StandardFonts, degrees, rgb,
+  PDFArray, PDFDict, PDFDocument, PDFName, PDFRef, PDFStream, StandardFonts, degrees, rgb,
   beginMarkedContent, concatTransformationMatrix, drawObject, endMarkedContent, popGraphicsState, pushGraphicsState,
   type PDFFont, type PDFImage, type PDFObject,
 } from '@cantoo/pdf-lib';
@@ -59,8 +59,9 @@ export async function exportPdf(
   const widgetTag = `FIMPW${crypto.getRandomValues(new Uint32Array(2)).join('')}`;
   // Bake form fields into the page so our text isn't hidden under widgets and fields aren't left live.
   // XFA is dropped explicitly (pdf-lib would otherwise warn); viewers would show it instead of the flattened page.
-  await regenerateIfNeeded(doc);
-  pinShownAppearances(doc, oc.widgets, widgetTag);
+  let blank: Set<string>;
+  ({ doc, blank } = await pdfjsAppearances(doc));
+  pinShownAppearances(doc, oc.widgets, widgetTag, blank);
   try {
     const form = doc.getForm();
     form.deleteXFA();
@@ -149,7 +150,7 @@ export async function exportPdf(
 // flatten (and any viewer, for widgets pdf-lib leaves as annotations) shows nothing else. pdf.js skips Hidden/NoView
 // widgets and those on hidden optional-content layers, and draws the /AS state; pdf-lib would draw them all, pick
 // button states by /V, and regenerate missing appearances. Every widget on every page counts, not just the field tree.
-function pinShownAppearances(doc: PDFDocument, ocVisible: Set<string>, tag: string) {
+function pinShownAppearances(doc: PDFDocument, ocVisible: Set<string>, tag: string, blank = new Set<string>()) {
   const ctx = doc.context;
   const [AP, N, Off] = ['AP', 'N', 'Off'].map((k) => PDFName.of(k));
   const empty = ctx.register(ctx.formXObject([], { BBox: [0, 0, 0, 0] }));
@@ -164,6 +165,17 @@ function pinShownAppearances(doc: PDFDocument, ocVisible: Set<string>, tag: stri
   }
   try {
     for (const f of doc.getForm().getFields()) for (const w of f.acroField.getWidgets()) if (!widgets.has(w.dict)) widgets.set(w.dict, undefined); // not on any page: never drawn
+    // Field-tree widgets on no page (editors that rewrite a field but leave the page pointing at the old widget) are
+    // never drawn by pdf.js; take them out of the field tree so the flatten doesn't try to place them.
+    const offPage = new Set([...widgets].filter(([, ref]) => !ref).map(([d]) => d));
+    const prune = (kids: PDFArray | undefined, depth = 0) => {
+      for (let i = (kids?.size() ?? 0) - 1; i >= 0 && depth < 32; i--) {
+        const k = kids!.lookupMaybe(i, PDFDict);
+        if (k && offPage.has(k)) kids!.remove(i);
+        else prune(k?.lookupMaybe(PDFName.of('Kids'), PDFArray), depth + 1);
+      }
+    };
+    if (offPage.size) prune(doc.getForm().acroForm.dict.lookupMaybe(PDFName.of('Fields'), PDFArray));
   } catch {}
   const button = (d: PDFDict | undefined, depth = 0): boolean =>
     !!d && depth < 32 && (d.has(PDFName.of('FT')) ? d.get(PDFName.of('FT')) === PDFName.of('Btn') : button(d.lookupMaybe(PDFName.of('Parent'), PDFDict), depth + 1));
@@ -171,8 +183,9 @@ function pinShownAppearances(doc: PDFDocument, ocVisible: Set<string>, tag: stri
     let shown: PDFObject | undefined = empty;
     try {
       const flags = Number(String(dict.lookup(PDFName.of('F')) ?? 0));
-      const ocShown = !dict.has(PDFName.of('OC')) || (!!ref && ocVisible.has(`${ref.objectNumber}R${ref.generationNumber || ''}`));
-      if (ref && !(flags & 2) && !(flags & 32) && ocShown) {
+      const id = ref && `${ref.objectNumber}R${ref.generationNumber || ''}`;
+      const ocShown = !dict.has(PDFName.of('OC')) || (!!id && ocVisible.has(id));
+      if (ref && !(flags & 2) && !(flags & 32) && ocShown && !blank.has(id!)) {
         const n = dict.lookupMaybe(AP, PDFDict)?.get(N);
         const nd = n && ctx.lookup(n);
         const state = dict.get(PDFName.of('AS'));
@@ -294,19 +307,33 @@ function fitToRect(doc: PDFDocument, widget: PDFDict, appearance: PDFRef, tag: s
   );
 }
 
-// With /NeedAppearances, viewers (and pdf.js) rebuild text/choice appearances from /V instead of the stored /AP.
-async function regenerateIfNeeded(doc: PDFDocument) {
+// With /NeedAppearances, pdf.js draws text/choice fields from their /V instead of the stored /AP. Let pdf.js write
+// those appearances itself (same _getAppearance code it displays with): clear the flag, put each field's value into
+// pdf.js's annotation storage, and save - pdf.js then emits an /AP stream per field as an incremental update, which
+// goes back through the xref layer. (saveDocument alone keeps NeedAppearances and writes no appearances.)
+async function pdfjsAppearances(doc: PDFDocument): Promise<{ doc: PDFDocument; blank: Set<string> }> {
+  const blank = new Set<string>(); // widgets pdf.js draws nothing for under NeedAppearances (empty choice fields)
+  const acroForm = doc.catalog.lookupMaybe(PDFName.of('AcroForm'), PDFDict);
+  if (String(acroForm?.lookup(PDFName.of('NeedAppearances'))) !== 'true') return { doc, blank };
+  acroForm!.delete(PDFName.of('NeedAppearances'));
+  const task = openPdf(await doc.save({ updateFieldAppearances: false, useObjectStreams: false }));
   try {
-    const form = doc.getForm();
-    if (String(form.acroForm.dict.lookup(PDFName.of('NeedAppearances'))) !== 'true') return;
-    const helvetica = await doc.embedFont(StandardFonts.Helvetica);
-    for (const f of form.getFields()) {
-      try {
-        const v = f instanceof PDFTextField ? f.getText() : f instanceof PDFDropdown || f instanceof PDFOptionList ? f.getSelected().join('') : '';
-        if (v?.trim()) (f as PDFTextField).updateAppearances(helvetica);
-      } catch {}
-    }
-  } catch {}
+    const pd = await task.promise;
+    for (let i = 1; i <= pd.numPages; i++)
+      for (const a of await (await pd.getPage(i)).getAnnotations()) {
+        // Exactly the widgets pdf.js regenerates for display: text/choice fields whose value isn't undefined/null
+        // (worker: hasAppearance ||= needAppearances && fieldValue !== undefined && fieldValue !== null) - empty
+        // strings included (they get pdf.js's border/background box). Passing the widget's current rotation is a
+        // no-op that stops save() from skipping a value that didn't change.
+        if (a.subtype !== 'Widget' || (a.fieldType !== 'Tx' && a.fieldType !== 'Ch') || a.fieldValue === undefined || a.fieldValue === null) continue;
+        // An empty choice field is drawn as nothing on screen (its save path would write a box): blank it.
+        if (a.fieldType === 'Ch' && !(Array.isArray(a.fieldValue) ? a.fieldValue.length : String(a.fieldValue))) blank.add(a.id);
+        else pd.annotationStorage.setValue(a.id, { value: a.fieldValue, rotation: a.rotation ?? 0 });
+      }
+    return { doc: (await loadAsPdfJsSees(await pd.saveDocument(), '')).doc, blank };
+  } finally {
+    task.destroy();
+  }
 }
 
 // Render every page of the original and of the candidate with pdf.js and compare pixels. Anything that can't be
@@ -385,7 +412,7 @@ async function sameTextAndAnnotations(a: PDFPageProxy, b: PDFPageProxy, da: PDFD
     if (!x.fileId) return null;
     const c = (await d.getAttachmentContent(x.fileId)) as unknown as { content?: Uint8Array } | Uint8Array | null;
     const bytes = c instanceof Uint8Array ? c : c?.content;
-    return bytes ? hash(bytes) : 'unreadable';
+    return bytes ? await hash(bytes) : 'unreadable';
   };
   const sig = async (d: PDFDocumentProxy, x: Record<string, any>) =>
     JSON.stringify([x.subtype, x.rect?.map((n: number) => n.toFixed(2)), x.url ?? null, x.unsafeUrl ?? null, x.dest ?? null, x.file?.filename ?? null, await content(d, x)]);
@@ -394,12 +421,9 @@ async function sameTextAndAnnotations(a: PDFPageProxy, b: PDFPageProxy, da: PDFD
   for (const x of await b.getAnnotations()) if (x.subtype !== 'Widget' && !before.has(await sig(db, x))) throw new Error(`page ${i}: annotation differs`);
 }
 
-// FNV-1a over the bytes, enough to tell two attachments apart.
-const hash = (b: Uint8Array) => {
-  let h = 0x811c9dc5;
-  for (const v of b) h = Math.imul(h ^ v, 0x01000193) >>> 0;
-  return `${b.length}:${h}`;
-};
+// SHA-256 of an attachment's bytes (collision-resistant, unlike a short checksum).
+const hash = async (b: Uint8Array) =>
+  `${b.length}:${Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', b as BufferSource)), (x) => x.toString(16).padStart(2, '0')).join('')}`;
 
 // Bookmarks: same titles and nesting; a target may be gone (we strip non-navigation actions) but never different.
 type OutlineItem = { title: string; dest?: unknown; url?: string | null; unsafeUrl?: string; action?: string | null; items: OutlineItem[] };

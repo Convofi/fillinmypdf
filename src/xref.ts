@@ -152,18 +152,42 @@ function readXref(input: Uint8Array, text: string): Xref {
   }
   if (!(newest!.get(PDFName.of('Root')) instanceof PDFRef)) fail('no /Root');
 
-  // Every live offset must point at that object's header (resynced within ±8 bytes), or pdf.js rebuilds the table
-  // by scanning and we can't know what it chose.
+  // Every live offset must point at that object's header (resynced within ±8 bytes). One that doesn't (Quartz writes
+  // in-use entries with offset 0 for objects that don't exist) is dead: pdf.js's fetchUncompressed throws
+  // XRefEntryException("Bad (uncompressed) XRef entry") for it, so unreferenced it is inert; if something does fetch
+  // it, pdf.js shows an error or re-indexes the file, and the render/text checks compare against exactly that.
   for (const [n, e] of live) {
     if (e.type !== 1 || n === 0) continue;
     const at = [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7, -8, 8].map((d) => e.offset + d).find((p) => {
       const m = p >= 0 && header(text, p);
       return m && +m[1] === n && +m[2] === e.gen;
     });
-    if (at === undefined) fail(`xref offset of ${n} does not point at it`);
-    e.offset = at!;
+    if (at === undefined) live.set(n, { type: 0 });
+    else e.offset = at;
   }
   return { live, trailer: newest!, sections, sectionObjects };
+}
+
+// Where an object's stream data ends, the way pdf.js reads it: /Length (direct, or an indirect integer through the
+// live xref) when it lands on "endstream", else the first "endstream". Without this an "endobj" inside the data would
+// end the object early. Returns the position to search for "endobj" from.
+function streamEnd(text: string, from: number, live: Map<number, Entry>): number {
+  const dictEnd = text.indexOf('endobj', from);
+  const kw = /(?:>>|[\0\t\n\f\r ])stream(?:\r\n|\r|\n)/g;
+  kw.lastIndex = from;
+  const s = kw.exec(text);
+  if (!s || (dictEnd >= 0 && s.index > dictEnd)) return from;
+  const data = s.index + s[0].length;
+  const dict = text.slice(from, s.index);
+  const len = /\/Length\s+(\d+)(\s+\d+\s+R)?/.exec(dict);
+  let length = len && !len[2] ? +len[1] : NaN;
+  if (len?.[2]) {
+    const e = live.get(+len[1]);
+    if (e?.type === 1) length = Number(new RegExp(`^${GAP.replace('+', '*')}\\d+${GAP}\\d+${GAP}obj${GAP}(\\d+)`).exec(text.slice(e.offset, e.offset + 64))?.[1] ?? NaN);
+  }
+  if (Number.isFinite(length) && /^[\0\t\n\f\r ]*endstream/.test(text.slice(data + length, data + length + 40))) return data + length;
+  const es = text.indexOf('endstream', data);
+  return es < 0 ? data : es;
 }
 
 // Layer 1: blank every raw "N G obj ... endobj" that isn't the live one (keeping older revisions of the same
@@ -179,7 +203,7 @@ export function xrefConsistentBytes(input: Uint8Array): { bytes: Uint8Array; xre
   for (let m; (m = re.exec(text)); ) {
     headers++;
     const [n, g, at] = [+m[1], +m[2], m.index];
-    const end = text.indexOf('endobj', at);
+    const end = text.indexOf('endobj', streamEnd(text, at + m[0].length, xref.live));
     const stop = end < 0 ? text.length : end + 6;
     re.lastIndex = stop;
     const e = xref.live.get(n);
