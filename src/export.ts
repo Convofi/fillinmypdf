@@ -3,7 +3,7 @@ import {
   beginMarkedContent, concatTransformationMatrix, drawObject, endMarkedContent, popGraphicsState, pushGraphicsState,
   type PDFFont, type PDFImage, type PDFObject,
 } from '@cantoo/pdf-lib';
-import * as pdfjs from 'pdfjs-dist';
+import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from 'pdfjs-dist';
 import { loadAsPdfJsSees } from './xref';
 

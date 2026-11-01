@@ -1,6 +1,6 @@
 import './style.css';
-import * as pdfjs from 'pdfjs-dist';
-import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
+import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, PageViewport, RenderTask } from 'pdfjs-dist';
 import { exportPdf, openPdf, UnsafeExport, type El } from './export';
 import { drawSignature, type Sig } from './signature';
@@ -136,7 +136,7 @@ async function load(file: File) {
     } catch (err) {
       task.destroy();
       if (gen !== loadGen) return;
-      if ((err as Error)?.name !== 'PasswordException') return alert("Couldn't open that file. Is it a valid PDF?");
+      if ((err as Error)?.name !== 'PasswordException') return alert(`Couldn't open that file. Is it a valid PDF?\n\n(${String((err as Error)?.message ?? err).slice(0, 200)})`);
       const entered = await askPassword(!!pw);
       if (entered === null) return; // cancelled: keep the current document
       pw = entered;
