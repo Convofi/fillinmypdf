@@ -71,6 +71,16 @@ function unpredict(data: Uint8Array, parms: PDFDict | undefined): Uint8Array {
   }
   return out;
 }
+// pdf.js reads a stream's /F and /DP before /Filter and /DecodeParms (Parser.filter, pdf.worker.mjs 11619-11620), and
+// leaves a stream whose filters include /Crypt undecrypted (#hasCryptFilter, 11527; makeStream, 11610-11611). We decode by
+// /Filter and decrypt every stream, so refuse stream dicts with /F, /DP or a /Crypt filter (an indirect filter name in
+// an xref stream, where we can't resolve it, too).
+function plainFilters(dict: PDFDict, resolve: (o: PDFObject | undefined) => PDFObject | undefined = (o) => o) {
+  if (dict.has(PDFName.of('F')) || dict.has(PDFName.of('DP'))) fail('stream with /F or /DP');
+  const f = resolve(dict.get(PDFName.of('Filter')));
+  const names = f instanceof PDFArray ? f.asArray().map(resolve) : [f];
+  if (names.some((n) => n === PDFName.of('Crypt') || n instanceof PDFRef)) fail('stream with a /Crypt filter');
+}
 const decodeStream = (s: PDFRawStream) => {
   const p = s.dict.lookup(PDFName.of('DecodeParms'));
   return unpredict(decodePDFRawStream(s).decode(), p instanceof PDFDict ? p : p instanceof PDFArray ? p.lookupMaybe(0, PDFDict) : undefined);
@@ -125,6 +135,7 @@ function readXref(input: Uint8Array, text: string): Xref {
       const s = PDFObjectParser.forBytes(input.subarray(at + h[0].length), ctx).parseObject();
       if (!(s instanceof PDFRawStream) || s.dict.get(PDFName.of('Type')) !== PDFName.of('XRef')) fail('bad xref stream');
       const stream = s as PDFRawStream;
+      plainFilters(stream.dict);
       trailer = stream.dict;
       const w = (stream.dict.lookup(PDFName.of('W'), PDFArray) as PDFArray).asArray().map((x) => num(x) ?? 0);
       const size = num(stream.dict.get(PDFName.of('Size'))) ?? 0;
@@ -296,6 +307,7 @@ export async function loadAsPdfJsSees(original: Uint8Array, password: string): P
       const got = pdfjsObject(original, text, e!.offset, PDFRef.of(n, e!.gen), ctx, cipher, lengthOf);
       if (got.raw) rawData.set(n, got.raw);
       obj = got.obj;
+      if (obj instanceof PDFRawStream) plainFilters(obj.dict, (o) => (o instanceof PDFRef && live.has(o.objectNumber) ? fetch(o.objectNumber) : o));
       const dict = obj instanceof PDFRawStream ? obj.dict : obj instanceof PDFDict ? obj : undefined;
       const type = dict?.get(PDFName.of('Type'));
       if (type !== undefined && !(type instanceof PDFName)) fail(`object ${n} has an indirect /Type`);
