@@ -11,7 +11,9 @@ import { CipherTransformFactory } from 'pdf-lib-crypto';
 //  2. after parsing: every object pdf-lib holds must be a live xref object, and equal to that object parsed at its
 //     xref location; differing ones are replaced (loadAsPdfJsSees). Anything we can't make consistent is refused.
 
-type Entry = { type: 0 } | { type: 1; offset: number; gen: number } | { type: 2; stream: number; index: number };
+// dead: an in-use entry whose offset isn't a header (pdf.js throws on fetching it); off: pdf.js's fetch at the exact
+// xref offset fails (we found the header only by resyncing a few bytes).
+type Entry = { type: 0; dead?: true } | { type: 1; offset: number; gen: number; off?: true } | { type: 2; stream: number; index: number };
 type Xref = { live: Map<number, Entry>; trailer: PDFDict; sections: Set<number>; sectionObjects: Set<number> };
 
 export class InconsistentFile extends Error {}
@@ -162,7 +164,9 @@ function readXref(input: Uint8Array, text: string): Xref {
       const m = p >= 0 && header(text, p);
       return m && +m[1] === n && +m[2] === e.gen;
     });
-    if (at === undefined) live.set(n, { type: 0 });
+    const exact = header(text, e.offset);
+    if (!exact || +exact[1] !== n || +exact[2] !== e.gen) e.off = true;
+    if (at === undefined) live.set(n, e.offset ? { type: 0, dead: true } : { type: 0 });
     else e.offset = at;
   }
   return { live, trailer: newest!, sections, sectionObjects };
@@ -235,13 +239,6 @@ export async function loadAsPdfJsSees(original: Uint8Array, password: string): P
     if (!(encDict instanceof PDFDict) || !(first instanceof PDFString || first instanceof PDFHexString)) fail('unreadable encryption');
     cipher = new CipherTransformFactory(encDict as PDFDict, (first as PDFString).asBytes(), password);
   }
-  // Parse the object whose "N G obj" header is at `at`, decrypting like pdf-lib does for that ref.
-  const parse = (at: number, ref: PDFRef) => {
-    const h = header(latin1(bytes.subarray(at, at + 512)), 0) ?? fail(`no object at ${at}`);
-    const parser = PDFObjectParser.forBytes(bytes.subarray(at + h[0].length), ctx);
-    if (cipher) (parser as unknown as { cryptoFactory: CipherTransformFactory }).cryptoFactory = cipher;
-    return parser.parseObject(ref);
-  };
 
   // (a) No object pdf.js wouldn't resolve: anything not in the live xref (a stale object stream's freed members, a
   // definition the scanner missed) doesn't exist for pdf.js, so it mustn't exist for pdf-lib either.
@@ -252,42 +249,94 @@ export async function loadAsPdfJsSees(original: Uint8Array, password: string): P
     if (!ok) ctx.delete(ref), replaced++;
   }
 
-  // Object streams, identified by their parsed /Type (a /Type that isn't a direct name is refused).
-  const streams = new Map<number, PDFRawStream>();
+  // Every live object as pdf.js resolves it, fetched on demand like XRef.fetch: type 1 parsed at its offset with the
+  // cipher (pdfjsObject cuts stream data the way pdf.js does), type 2 from its decoded object stream.
+  const text = latin1(original);
   const liveObjects = new Map<number, PDFObject>();
-  for (const [n, e] of live) {
-    if (e.type !== 1 || n === 0 || xref.sectionObjects.has(n)) continue;
-    const obj = parse(e.offset, PDFRef.of(n, e.gen));
-    liveObjects.set(n, obj);
-    const dict = obj instanceof PDFRawStream ? obj.dict : obj instanceof PDFDict ? obj : undefined;
-    const type = dict?.get(PDFName.of('Type'));
-    if (type !== undefined && !(type instanceof PDFName)) fail(`object ${n} has an indirect /Type`);
-    if (type === PDFName.of('ObjStm')) streams.set(n, obj as PDFRawStream);
-  }
-  const members = new Map<number, number>(); // type-2 objects -> container
-  for (const [n, e] of live) if (e.type === 2) members.set(n, e.stream);
-  for (const s of new Set(members.values())) if (!streams.has(s)) fail(`object stream ${s} is missing`);
-  for (const [s, stream] of streams) {
-    const data = decodeStream(stream);
-    const count = num(stream.dict.get(PDFName.of('N'))) ?? 0;
-    const first = num(stream.dict.get(PDFName.of('First'))) ?? 0;
+  const rawData = new Map<number, Uint8Array>(); // stream data as pdf.js cuts it, before decryption
+  const decoded = new Map<number, Map<number, PDFObject>>(); // object stream -> object number -> object
+  const pending = new Set<number>();
+  const lengthOf = (dict: PDFDict) => {
+    const l = dict.get(PDFName.of('Length'));
+    if (!(l instanceof PDFRef)) return num(l);
+    const e = live.get(l.objectNumber);
+    if (!e || e.type === 0) return undefined; // pdf.js: null (a dead entry is refused in (c))
+    if (e.type === 1 && e.gen !== l.generationNumber) fail(`/Length ${l} has the wrong generation`);
+    return num(fetch(l.objectNumber));
+  };
+  const objectStream = (s: number) => {
+    const known = decoded.get(s);
+    if (known) return known;
+    const stream = live.get(s)?.type === 1 ? fetch(s) : undefined;
+    if (!(stream instanceof PDFRawStream) || stream.dict.get(PDFName.of('Type')) !== PDFName.of('ObjStm')) fail(`object stream ${s} is missing`);
+    const { dict } = stream as PDFRawStream;
+    const data = decodeStream(stream as PDFRawStream);
+    const count = num(dict.get(PDFName.of('N'))) ?? 0;
+    const first = num(dict.get(PDFName.of('First'))) ?? 0;
     const pairs = latin1(data.subarray(0, first)).trim().split(/\s+/, count * 2).map(Number);
     // Older revisions' object streams may still list superseded objects: only the live (number, index) pairs count.
+    const objects = new Map<number, PDFObject>();
     for (let i = 0; i < count; i++) {
       const n = pairs[2 * i];
       const e = live.get(n);
       if (e?.type === 2 && e.stream === s && e.index === i)
-        liveObjects.set(n, PDFObjectParser.forBytes(data.subarray(first + pairs[2 * i + 1]), ctx).parseObject(PDFRef.of(n, 0)));
+        objects.set(n, PDFObjectParser.forBytes(data.subarray(first + pairs[2 * i + 1]), ctx).parseObject(PDFRef.of(n, 0)));
     }
+    decoded.set(s, objects);
+    return objects;
+  };
+  const fetch = (n: number): PDFObject => {
+    const known = liveObjects.get(n);
+    if (known) return known;
+    const e = live.get(n);
+    if (!e || e.type === 0 || pending.has(n)) fail(`object ${n} is not resolvable`);
+    pending.add(n);
+    let obj: PDFObject;
+    if (e!.type === 1) {
+      const got = pdfjsObject(original, text, e!.offset, PDFRef.of(n, e!.gen), ctx, cipher, lengthOf);
+      if (got.raw) rawData.set(n, got.raw);
+      obj = got.obj;
+      const dict = obj instanceof PDFRawStream ? obj.dict : obj instanceof PDFDict ? obj : undefined;
+      const type = dict?.get(PDFName.of('Type'));
+      if (type !== undefined && !(type instanceof PDFName)) fail(`object ${n} has an indirect /Type`);
+    } else {
+      const { stream } = e as { stream: number };
+      obj = objectStream(stream).get(n) ?? fail(`object ${n} is not at its index in object stream ${stream}`);
+    }
+    pending.delete(n);
+    liveObjects.set(n, obj);
+    return obj;
+  };
+  for (const [n] of live) if (n !== 0 && !xref.sectionObjects.has(n) && live.get(n)!.type !== 0) fetch(n);
+
+  // (c) A ref pdf.js can't fetch (dead entry, offset off its header, other generation) throws XRefEntryException
+  // (fetchUncompressed, pdf.worker.mjs 58683-58713). While pdf.js checks the page tree (checkFirstPage/checkLastPage,
+  // 60006-60055) that becomes XRefParseException and recovery mode (XRef.indexObjects, 58330): the whole file is
+  // re-indexed with later definitions winning - a document different from the xref's. Refuse any such ref reachable
+  // from the trailer (unreferenced dead entries, like Quartz's offset-0 ones, are inert).
+  const seen = new Set<number>();
+  const todo: (PDFObject | undefined)[] = [xref.trailer];
+  while (todo.length) {
+    const o = todo.pop();
+    if (o instanceof PDFRef) {
+      const e = live.get(o.objectNumber);
+      if ((e?.type === 0 && e.dead) || (e?.type === 1 && (e.off || e.gen !== o.generationNumber))) fail(`${o} can't be fetched`);
+      if (!seen.has(o.objectNumber)) seen.add(o.objectNumber), todo.push(liveObjects.get(o.objectNumber));
+    } else if (o instanceof PDFDict) for (const v of o.values()) todo.push(v);
+    else if (o instanceof PDFArray) for (const v of o.asArray()) todo.push(v);
+    else if (o instanceof PDFRawStream) todo.push(o.dict);
   }
-  for (const [n, s] of members) if (!liveObjects.has(n)) fail(`object ${n} is not at its index in object stream ${s}`);
 
   // (b) Every live object pdf-lib holds must equal the live definition; replace the ones that don't.
   for (const [n, obj] of liveObjects) {
     const e = live.get(n)!;
     const ref = PDFRef.of(n, e.type === 1 ? e.gen : 0);
     const held = ctx.lookup(ref);
-    if (held === undefined || held.toString() !== obj.toString()) {
+    // Encrypted streams are compared raw too: pdf-lib's data at that offset before decryption.
+    const raw = cipher && rawData.get(n);
+    let heldRaw: Uint8Array | undefined;
+    if (raw && e.type === 1) try { heldRaw = (parseAt(bytes, e.offset) as PDFRawStream).contents; } catch { /* pdf-lib can't read it: differs */ }
+    if (held === undefined || held.toString() !== obj.toString() || (raw && !same(heldRaw, raw))) {
       ctx.assign(ref, obj);
       replaced++;
     }
@@ -302,6 +351,52 @@ export async function loadAsPdfJsSees(original: Uint8Array, password: string): P
   return { doc, replaced };
 }
 
+// Parse the object whose "N G obj" header is at `at` the way pdf.js does, decrypting like pdf-lib for that ref.
+// Stream data (Parser.makeStream, pdf.worker.mjs 11585-11610): skip to the next line after the "stream" token
+// (Lexer.skipToNextLine, 12078); take /Length bytes if an integer /Length (indirect: fetched) is followed by an
+// "endstream" token, else up to the first "endstream" (#findStreamLength, 11530-11584, which also accepts
+// "endsteam"/"endstrea" + whitespace). pdf-lib differs for an indirect /Length: it runs to the first "endstream" not
+// balanced by an earlier "stream" word in the data. `raw` is the data before decryption.
+const SPECIAL = new Set([0, 9, 10, 12, 13, 32, ...[...'%()/<>[]{}'].map((c) => c.charCodeAt(0))]);
+function pdfjsObject(
+  bytes: Uint8Array, text: string, at: number, ref: PDFRef, ctx: PDFContext, cipher: CipherTransformFactory | undefined, lengthOf: (d: PDFDict) => number | undefined,
+): { obj: PDFObject; raw?: Uint8Array } {
+  const h = header(text, at) ?? fail(`no object at ${at}`);
+  const base = at + h[0].length;
+  const p = PDFObjectParser.forBytes(bytes.subarray(base), ctx) as unknown as {
+    parseObject(ref: PDFRef): PDFObject; parseDict(ref: PDFRef): PDFDict; skipWhitespaceAndComments(): void; bytes: { offset(): number }; cryptoFactory?: CipherTransformFactory;
+  };
+  p.cryptoFactory = cipher;
+  p.skipWhitespaceAndComments();
+  if (!text.startsWith('<<', base + p.bytes.offset())) return { obj: p.parseObject(ref) };
+  const dict = p.parseDict(ref);
+  p.skipWhitespaceAndComments();
+  const kw = base + p.bytes.offset();
+  if (!text.startsWith('stream', kw)) return { obj: dict };
+  if (kw + 6 < bytes.length && !SPECIAL.has(bytes[kw + 6])) fail(`object ${ref} has a stream keyword pdf.js does not read`);
+  let start = kw + 6;
+  while (start < bytes.length && bytes[start] !== 13 && bytes[start] !== 10) start++;
+  start += bytes[start] === 13 && bytes[start + 1] === 10 ? 2 : 1;
+  let end = -1;
+  const length = lengthOf(dict);
+  if (length !== undefined && Number.isInteger(length) && length >= 0) {
+    // The next token after the data, skipping whitespace and comments like pdf.js's Lexer.getObj.
+    const t = new RegExp(String.raw`(?:[\0\t\n\f\r ]|%[^\r\n]*(?![^\r\n]))*endstream`, 'y');
+    t.lastIndex = start + length;
+    if (t.test(text) && (t.lastIndex >= bytes.length || SPECIAL.has(bytes[t.lastIndex]))) end = start + length;
+  }
+  if (end < 0) {
+    const es = /end(?:stream|steam[\t\n\r ]|strea[\t\n\r ])/g;
+    es.lastIndex = start;
+    const m = es.exec(text);
+    if (!m || m.index + 9 >= bytes.length) fail(`object ${ref} has no endstream`);
+    end = m!.index;
+  }
+  const raw = bytes.slice(start, end);
+  return { obj: PDFRawStream.of(dict, cipher ? cipher.createCipherTransform(ref.objectNumber, ref.generationNumber).decryptBytes(raw) : raw), raw };
+}
+
+const same = (a: Uint8Array | undefined, b: Uint8Array) => a?.length === b.length && a.every((x, i) => x === b[i]);
 const parseAt = (bytes: Uint8Array, at: number) => {
   const h = header(latin1(bytes.subarray(at, at + 512)), 0);
   return h ? PDFObjectParser.forBytes(bytes.subarray(at + h[0].length), PDFContext.create()).parseObject() : undefined;
