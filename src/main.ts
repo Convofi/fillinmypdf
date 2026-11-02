@@ -4,7 +4,7 @@ import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, PageViewport, RenderTask } from 'pdfjs-dist';
 import { exportPdf, openPdf, UnsafeExport, type El } from './export';
 import { drawSignature, type Sig } from './signature';
-import { askPassword, notice } from './dialogs';
+import { askPassword, feedback, notice } from './dialogs';
 import { inject, track } from '@vercel/analytics';
 
 // Cookieless page views + a bare 'download' count; served from our own origin (/_vercel/insights) on Vercel.
@@ -584,6 +584,7 @@ addEventListener('drop', (ev) => {
 });
 
 for (const id of ['#drop', '#brand', '#open']) $(id).addEventListener('click', () => fileInput.click());
+$('#feedback').addEventListener('click', feedback);
 fileInput.addEventListener('change', () => {
   const f = fileInput.files?.[0];
   fileInput.value = '';
