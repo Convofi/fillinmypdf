@@ -307,16 +307,28 @@ function fitToRect(doc: PDFDocument, widget: PDFDict, appearance: PDFRef, tag: s
   );
 }
 
-// With /NeedAppearances, pdf.js draws text/choice fields from their /V instead of the stored /AP; in an XFA form it
-// draws a widget that has no /AP from the datasets value (worker: _hasValueFromXFA). Let pdf.js write those
-// appearances itself (same _getAppearance code it displays with): clear the flag, put each field's value into
+// XFA forms: pdf.js draws a widget that has no /AP from the XFA datasets value (worker: _hasValueFromXFA). On USCIS's
+// blank forms those are the raw defaults of script-computed totals ("0.00000000"): a viewer that runs the form's
+// scripts would recompute and format them, we run none, and the user could neither edit nor type over them. The editor
+// drops the XFA layer before opening a file: those widgets become empty fields to fill, every other pre-filled value
+// keeps its /AP, and the export (which strips XFA anyway) works from the same bytes. Returns the input without XFA.
+export async function withoutXfa(bytes: Uint8Array, password: string): Promise<Uint8Array> {
+  const { doc } = await loadAsPdfJsSees(bytes, password);
+  const acroForm = doc.catalog.lookupMaybe(PDFName.of('AcroForm'), PDFDict);
+  if (!acroForm?.has(PDFName.of('XFA'))) return bytes;
+  acroForm.delete(PDFName.of('XFA'));
+  dropUnreachable(doc); // see pdfjsAppearances
+  return doc.save({ updateFieldAppearances: false, useObjectStreams: false });
+}
+
+// With /NeedAppearances, pdf.js draws text/choice fields from their /V instead of the stored /AP. Let pdf.js write
+// those appearances itself (same _getAppearance code it displays with): clear the flag, put each field's value into
 // pdf.js's annotation storage, and save - pdf.js then emits an /AP stream per field as an incremental update, which
 // goes back through the xref layer. (saveDocument alone keeps NeedAppearances and writes no appearances.)
 async function pdfjsAppearances(doc: PDFDocument): Promise<{ doc: PDFDocument; blank: Set<string> }> {
   const blank = new Set<string>(); // widgets pdf.js draws nothing for under NeedAppearances (empty choice fields)
   const acroForm = doc.catalog.lookupMaybe(PDFName.of('AcroForm'), PDFDict);
-  const needAppearances = String(acroForm?.lookup(PDFName.of('NeedAppearances'))) === 'true';
-  if (!needAppearances && !acroForm?.has(PDFName.of('XFA'))) return { doc, blank };
+  if (String(acroForm?.lookup(PDFName.of('NeedAppearances'))) !== 'true') return { doc, blank };
   acroForm!.delete(PDFName.of('NeedAppearances'));
   // Superseded cross-reference streams would be saved as ordinary objects, and pdf-lib's parser would then take their
   // /Encrypt and /ID as trailer entries when it reloads the (plaintext) result.
@@ -326,17 +338,14 @@ async function pdfjsAppearances(doc: PDFDocument): Promise<{ doc: PDFDocument; b
     const pd = await task.promise;
     for (let i = 1; i <= pd.numPages; i++)
       for (const a of await (await pd.getPage(i)).getAnnotations()) {
-        // Under NeedAppearances, exactly the widgets pdf.js regenerates for display: text/choice fields whose value
-        // isn't undefined/null (worker: hasAppearance ||= needAppearances && fieldValue !== undefined && fieldValue
-        // !== null) - empty strings included (they get pdf.js's border/background box). Passing the widget's current
-        // rotation is a no-op that stops save() from skipping a value that didn't change.
-        // Otherwise (XFA form) pdf.js draws from the value only where there is no /AP, and only when the value came
-        // from the datasets: without a rotation, save() applies that same test and writes nothing for the others.
+        // Exactly the widgets pdf.js regenerates for display: text/choice fields whose value isn't undefined/null
+        // (worker: hasAppearance ||= needAppearances && fieldValue !== undefined && fieldValue !== null) - empty
+        // strings included (they get pdf.js's border/background box). Passing the widget's current rotation is a
+        // no-op that stops save() from skipping a value that didn't change.
         if (a.subtype !== 'Widget' || (a.fieldType !== 'Tx' && a.fieldType !== 'Ch') || a.fieldValue === undefined || a.fieldValue === null) continue;
-        if (!needAppearances && a.hasAppearance) continue;
         // An empty choice field is drawn as nothing on screen (its save path would write a box): blank it.
         if (a.fieldType === 'Ch' && !(Array.isArray(a.fieldValue) ? a.fieldValue.length : String(a.fieldValue))) blank.add(a.id);
-        else pd.annotationStorage.setValue(a.id, needAppearances ? { value: a.fieldValue, rotation: a.rotation ?? 0 } : { value: a.fieldValue });
+        else pd.annotationStorage.setValue(a.id, { value: a.fieldValue, rotation: a.rotation ?? 0 });
       }
     return { doc: (await loadAsPdfJsSees(await pd.saveDocument(), '')).doc, blank };
   } finally {

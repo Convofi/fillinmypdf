@@ -2,7 +2,7 @@ import './style.css';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, PageViewport, RenderTask } from 'pdfjs-dist';
-import { exportPdf, openPdf, UnsafeExport, type El } from './export';
+import { exportPdf, openPdf, UnsafeExport, withoutXfa, type El } from './export';
 import { drawSignature, type Sig } from './signature';
 import { askPassword, feedback, notice } from './dialogs';
 import { inject, track } from '@vercel/analytics';
@@ -116,17 +116,33 @@ async function readPage(page: PDFPageProxy, oc: Awaited<ReturnType<PDFDocumentPr
 
 async function load(file: File) {
   const gen = ++loadGen;
-  const data = new Uint8Array(await file.arrayBuffer());
+  let data: Uint8Array = new Uint8Array(await file.arrayBuffer());
   let pw = '';
   let task: PDFDocumentLoadingTask;
   let info: Awaited<ReturnType<typeof readPage>>[];
   let ocShown = new Set<string>();
   let ocHidden = new Set<string>();
+  let hadPassword = false;
+  let xfaChecked = false;
   for (;;) {
     // pdf.js transfers the buffer it is given, so hand it a copy and keep the original for pdf-lib.
     task = openPdf(data.slice(), pw);
     try {
       const doc = await task.promise;
+      // An XFA form opens without its XFA layer (see withoutXfa); the copy is decrypted, so no password from here on.
+      // A file the xref layer can't make consistent opens as-is: the export refuses it with the reason.
+      if (!xfaChecked) {
+        xfaChecked = true;
+        const plain = ((await doc.getMetadata()).info as { IsXFAPresent?: boolean }).IsXFAPresent ? await withoutXfa(data, pw).catch(() => null) : null;
+        if (gen !== loadGen) return void task.destroy();
+        if (plain && plain !== data) {
+          task.destroy();
+          data = plain;
+          hadPassword = !!pw;
+          pw = '';
+          continue;
+        }
+      }
       const oc = await doc.getOptionalContentConfig();
       ocShown = new Set();
       ocHidden = new Set();
@@ -177,7 +193,7 @@ async function load(file: File) {
   hasFields = pages.some((p) => p.fields.length > 0);
   setMode('none');
   nameEl.textContent = file.name;
-  $('#pwnote').hidden = !pw;
+  $('#pwnote').hidden = !(pw || hadPassword);
   emptyEl.hidden = true;
   editorEl.hidden = false;
   window.scrollTo(0, 0);
