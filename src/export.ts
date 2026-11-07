@@ -5,7 +5,7 @@ import {
 } from '@cantoo/pdf-lib';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from 'pdfjs-dist';
-import { loadAsPdfJsSees } from './xref';
+import { dropUnreachable, loadAsPdfJsSees } from './xref';
 
 // One set of pdf.js options for the editor and for the export check, so both see the file the same way.
 export const pdfOptions = {
@@ -493,20 +493,4 @@ async function rasterize(page: PDFPageProxy, scale: number, canvas: HTMLCanvasEl
   canvas.width = Math.max(1, Math.floor(viewport.width));
   canvas.height = Math.max(1, Math.floor(viewport.height));
   await page.render({ canvas, viewport, background: 'white', annotationMode: pdfjs.AnnotationMode.ENABLE }).promise;
-}
-
-function dropUnreachable(doc: PDFDocument) {
-  const seen = new Set<PDFRef>();
-  const walk = (o: PDFObject | undefined): void => {
-    if (o instanceof PDFRef) {
-      if (seen.has(o)) return;
-      seen.add(o);
-      walk(doc.context.lookup(o));
-    } else if (o instanceof PDFDict) o.values().forEach(walk);
-    else if (o instanceof PDFArray) o.asArray().forEach(walk);
-    else if (o instanceof PDFStream) walk(o.dict);
-  };
-  walk(doc.context.trailerInfo.Root);
-  walk(doc.context.trailerInfo.Info);
-  for (const [ref] of doc.context.enumerateIndirectObjects()) if (!seen.has(ref)) doc.context.delete(ref);
 }

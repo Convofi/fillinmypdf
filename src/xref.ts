@@ -1,5 +1,5 @@
 import {
-  PDFArray, PDFContext, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, PDFObjectParser, PDFRawStream, PDFRef,
+  PDFArray, PDFContext, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, PDFObjectParser, PDFRawStream, PDFRef, PDFStream,
   PDFString, decodePDFRawStream, type PDFObject,
 } from '@cantoo/pdf-lib';
 import { CipherTransformFactory } from 'pdf-lib-crypto';
@@ -356,7 +356,10 @@ export async function loadAsPdfJsSees(original: Uint8Array, password: string): P
   const root = xref.trailer.get(PDFName.of('Root')) as PDFRef;
   if (ctx.trailerInfo.Root !== root) (ctx.trailerInfo.Root = root), replaced++;
   if (replaced) {
-    // pdf-lib's document caches the catalog and page tree: rebuild it from the corrected object table.
+    // pdf-lib's document caches the catalog and page tree: rebuild it from the corrected object table. Superseded
+    // cross-reference streams would be saved as ordinary objects, and pdf-lib's parser would then take their /Encrypt
+    // and /ID as trailer entries when it reloads the (plaintext) result.
+    dropUnreachable(doc);
     const fixed = await doc.save({ updateFieldAppearances: false, useObjectStreams: false });
     doc = await PDFDocument.load(fixed, { preserveXFA: true });
   }
@@ -405,7 +408,33 @@ function pdfjsObject(
     end = m!.index;
   }
   const raw = bytes.slice(start, end);
-  return { obj: PDFRawStream.of(dict, cipher ? cipher.createCipherTransform(ref.objectNumber, ref.generationNumber).decryptBytes(raw) : raw), raw };
+  const plain = dropIdentityCrypt(dict);
+  return { obj: PDFRawStream.of(dict, cipher && !plain ? cipher.createCipherTransform(ref.objectNumber, ref.generationNumber).decryptBytes(raw) : raw), raw };
+}
+
+// pdf.js reads a stream whose filters include /Crypt without the document cipher (Parser.makeStream, pdf.worker.mjs
+// 17272) and applies that filter itself (makeFilter, 17352: the crypt filter named by its /DecodeParms /Name, default
+// /Identity, which passes the bytes through). USCIS forms keep their XMP metadata readable that way (/EncryptMetadata
+// false). The output is saved unencrypted, where /Crypt means nothing: drop an Identity /Crypt from the dict and keep
+// the raw bytes. A named crypt filter (pdf.js would decrypt with it) or an indirect /DecodeParms is refused.
+function dropIdentityCrypt(dict: PDFDict): boolean {
+  const f = dict.get(PDFName.of('Filter'));
+  const names = f instanceof PDFArray ? f.asArray() : [f];
+  const i = names.indexOf(PDFName.of('Crypt'));
+  if (i < 0) return false;
+  const p = dict.get(PDFName.of('DecodeParms'));
+  const parms = f instanceof PDFArray ? (p instanceof PDFArray ? p.asArray()[i] : undefined) : p;
+  if (parms instanceof PDFRef) fail('stream with an indirect /Crypt /DecodeParms');
+  const name = parms instanceof PDFDict ? parms.get(PDFName.of('Name')) : undefined;
+  if (name !== undefined && name !== PDFName.of('Identity')) fail('stream with a named /Crypt filter');
+  if (f instanceof PDFArray && f.size() > 1) {
+    f.remove(i);
+    if (p instanceof PDFArray && i < p.size()) p.remove(i);
+  } else {
+    dict.delete(PDFName.of('Filter'));
+    dict.delete(PDFName.of('DecodeParms'));
+  }
+  return true;
 }
 
 const same = (a: Uint8Array | undefined, b: Uint8Array) => a?.length === b.length && a.every((x, i) => x === b[i]);
@@ -413,3 +442,20 @@ const parseAt = (bytes: Uint8Array, at: number) => {
   const h = header(latin1(bytes.subarray(at, at + 512)), 0);
   return h ? PDFObjectParser.forBytes(bytes.subarray(at + h[0].length), PDFContext.create()).parseObject() : undefined;
 };
+
+// Delete every object the catalog and /Info don't reach.
+export function dropUnreachable(doc: PDFDocument) {
+  const seen = new Set<PDFRef>();
+  const walk = (o: PDFObject | undefined): void => {
+    if (o instanceof PDFRef) {
+      if (seen.has(o)) return;
+      seen.add(o);
+      walk(doc.context.lookup(o));
+    } else if (o instanceof PDFDict) o.values().forEach(walk);
+    else if (o instanceof PDFArray) o.asArray().forEach(walk);
+    else if (o instanceof PDFStream) walk(o.dict);
+  };
+  walk(doc.context.trailerInfo.Root);
+  walk(doc.context.trailerInfo.Info);
+  for (const [ref] of doc.context.enumerateIndirectObjects()) if (!seen.has(ref)) doc.context.delete(ref);
+}
